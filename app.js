@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.4';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -3712,6 +3712,173 @@ document.addEventListener('keydown', event => {
 $('#overlay').addEventListener('click', event => {
   if (event.target.id === 'overlay') closeSheet();
 });
+
+/* =========================================================================
+   Tap-to-place caret
+   ========================================================================= */
+
+/* On a tap, iOS only ever puts the caret at the start or end of a word; landing
+   between two letters takes a long-press drag. Most fields here hold a single
+   "word" (a callsign, a time, a coordinate), so a tap could never reach the
+   middle of one. On a quick touch tap, work out which character boundary is
+   under the finger and put the caret there ourselves. */
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+const CARET_MIRROR_PROPS = [
+  'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontStretch', 'fontVariant',
+  'fontVariantNumeric', 'fontFeatureSettings', 'fontKerning', 'letterSpacing',
+  'wordSpacing', 'textTransform', 'textIndent', 'textAlign', 'lineHeight', 'tabSize',
+  'direction', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+  'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
+];
+const CARET_MAX_LENGTH = 20000;
+
+let caretDown = null;     // touch currently in progress on a text field
+let caretTap = null;      // completed quick tap, waiting for its click
+let caretLastTapAt = 0;   // to leave double-tap (select word) alone
+let caretPin = null;      // caret position to hold while iOS settles its own
+
+function isCaretField(el) {
+  if (!el || el.disabled || el.readOnly) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  return el.tagName === 'INPUT' && /^(text|search|tel|url)$/.test(el.type);
+}
+
+/* Lay the field's text out in a hidden copy with the same box and font, then
+   find the character boundary closest to the tapped point. */
+function caretIndexFromPoint(el, x, y) {
+  const value = el.value;
+  if (!value) return 0;
+  if (value.length > CARET_MAX_LENGTH) return null;
+
+  const multiline = el.tagName === 'TEXTAREA';
+  const computed = getComputedStyle(el);
+  const mirror = document.createElement('div');
+  CARET_MIRROR_PROPS.forEach(prop => { mirror.style[prop] = computed[prop]; });
+  Object.assign(mirror.style, {
+    position: 'fixed',
+    left: '0',
+    top: '0',
+    margin: '0',
+    boxSizing: 'border-box',
+    width: el.offsetWidth + 'px',
+    height: el.offsetHeight + 'px',
+    borderStyle: 'solid',
+    borderColor: 'transparent',
+    overflow: 'hidden',
+    visibility: 'hidden',
+    pointerEvents: 'none',
+    whiteSpace: multiline ? 'pre-wrap' : 'pre',
+    overflowWrap: multiline ? 'break-word' : 'normal'
+  });
+  mirror.textContent = value;
+  document.body.appendChild(mirror);
+  mirror.scrollLeft = el.scrollLeft;
+  mirror.scrollTop = el.scrollTop;
+
+  const fieldRect = el.getBoundingClientRect();
+  const mirrorRect = mirror.getBoundingClientRect();
+  const px = x - fieldRect.left + mirrorRect.left;
+  const py = y - fieldRect.top + mirrorRect.top;
+
+  const node = mirror.firstChild;
+  const range = document.createRange();
+  let best = value.length;
+  let bestDy = Infinity;
+  let bestDx = Infinity;
+  const consider = (index, dy, dx) => {
+    if (dy < bestDy || (dy === bestDy && dx < bestDx)) {
+      best = index;
+      bestDy = dy;
+      bestDx = dx;
+    }
+  };
+
+  for (let i = 0; i < value.length;) {
+    const code = value.charCodeAt(i);
+    const size = code >= 0xD800 && code <= 0xDBFF && i + 1 < value.length ? 2 : 1;
+    range.setStart(node, i);
+    range.setEnd(node, i + size);
+    const rect = range.getClientRects()[0];
+    if (rect) {
+      // A single-line field has one line wherever the finger lands vertically.
+      const dy = !multiline || (py >= rect.top && py <= rect.bottom)
+        ? 0
+        : Math.min(Math.abs(py - rect.top), Math.abs(py - rect.bottom));
+      consider(i, dy, Math.abs(px - rect.left));
+      if (value[i] !== '\n') consider(i + size, dy, Math.abs(px - rect.right));
+    }
+    i += size;
+  }
+
+  mirror.remove();
+  return best;
+}
+
+function holdCaretPin() {
+  const pin = caretPin;
+  if (!pin) return;
+  if (Date.now() > pin.until || document.activeElement !== pin.el) {
+    caretPin = null;
+    return;
+  }
+  const el = pin.el;
+  // A range means iOS selected something (double tap); that wins.
+  if (el.selectionStart !== el.selectionEnd) {
+    caretPin = null;
+    return;
+  }
+  if (el.selectionStart !== pin.index) el.setSelectionRange(pin.index, pin.index);
+}
+
+function setupCaretTaps() {
+  if (!IS_IOS || !window.PointerEvent) return;
+
+  document.addEventListener('pointerdown', event => {
+    caretPin = null;
+    caretTap = null;
+    const isFinger = event.isPrimary && (event.pointerType === 'touch' || event.pointerType === 'pen');
+    caretDown = isFinger && isCaretField(event.target)
+      ? { el: event.target, x: event.clientX, y: event.clientY, at: Date.now() }
+      : null;
+  }, true);
+
+  document.addEventListener('pointerup', event => {
+    const down = caretDown;
+    caretDown = null;
+    if (!down || event.target !== down.el) return;
+    const now = Date.now();
+    const moved = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    const isDoubleTap = down.at - caretLastTapAt < 500;
+    caretLastTapAt = now;
+    if (now - down.at > 400 || moved > 10 || isDoubleTap) return;
+    caretTap = { el: down.el, x: event.clientX, y: event.clientY, at: now };
+  }, true);
+
+  document.addEventListener('pointercancel', () => { caretDown = null; }, true);
+
+  document.addEventListener('click', event => {
+    const tap = caretTap;
+    caretTap = null;
+    if (!tap || event.target !== tap.el || Date.now() - tap.at > 800) return;
+    const el = tap.el;
+    if (document.activeElement !== el || el.selectionStart !== el.selectionEnd) return;
+    const index = caretIndexFromPoint(el, tap.x, tap.y);
+    if (index == null) return;
+    el.setSelectionRange(index, index);
+    // iOS may apply its own word-boundary caret just after the click; hold ours
+    // briefly, and let go the moment the user types or touches again.
+    caretPin = { el, index, until: Date.now() + 300 };
+    [0, 60, 200].forEach(delay => setTimeout(holdCaretPin, delay));
+  }, true);
+
+  document.addEventListener('selectionchange', holdCaretPin);
+  document.addEventListener('keydown', () => { caretPin = null; }, true);
+  document.addEventListener('beforeinput', () => { caretPin = null; }, true);
+}
+
+setupCaretTaps();
 
 /* =========================================================================
    Boot
