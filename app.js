@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2905,7 +2905,7 @@ function loadImageData(url) {
 }
 
 function preloadPdfLogo() {
-  loadImageData('icons/propeller-print.png')
+  loadImageData('icons/emblem.png')
     .then(data => { pdfLogoData = data; })
     .catch(() => { /* the PDF still works without the corner mark */ });
 }
@@ -3551,7 +3551,7 @@ function buildPrint() {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/propeller.svg" alt="">
+          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">Observer Mission Log</div>
             <div class="p-sub">Civil Air Patrol · sortie record</div>
@@ -3617,7 +3617,7 @@ function buildPrint() {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/propeller.svg" alt="">
+          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">Notes &amp; Observations</div>
             <div class="p-sub">${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')} · ${esc(log.aircraft || 'No tail')}</div>
@@ -3676,7 +3676,7 @@ function sarPrintPage(log, printDate) {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/propeller.svg" alt="">
+          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">SAR Results Worksheet</div>
             <div class="p-sub">CAPF 104a · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</div>

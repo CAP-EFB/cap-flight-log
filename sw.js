@@ -1,5 +1,5 @@
 /* Observer Log service worker — cache-first so the app works with no signal. */
-const CACHE = 'observer-log-v1.5.1';
+const CACHE = 'observer-log-v1.5.2';
 
 const ASSETS = [
   './',
@@ -13,8 +13,7 @@ const ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './icons/propeller.svg',
-  './icons/propeller-print.png'
+  './icons/emblem.png'
 ];
 
 self.addEventListener('install', event => {
