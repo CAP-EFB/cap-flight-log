@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.3.8';
+const APP_VERSION = '1.3.9';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -3873,6 +3873,57 @@ function setupCaretTaps() {
 setupCaretTaps();
 
 /* =========================================================================
+   App updates
+   ========================================================================= */
+
+/* The service worker serves the cached build first and fetches a new one in
+   the background, so on its own a deploy only shows up on the launch after the
+   next one. Instead: look for a new build whenever the app comes to the
+   foreground, and once the new worker has taken over, reload into it — at once
+   if nothing is being edited, otherwise on the next return to the app or when
+   the user taps Reload. */
+let swRegistration = null;
+let updateReady = false;
+let lastUpdateCheck = 0;
+
+function checkForUpdate() {
+  if (!swRegistration || Date.now() - lastUpdateCheck < 60000) return;
+  lastUpdateCheck = Date.now();
+  swRegistration.update().catch(() => { /* offline: try again next time */ });
+}
+
+function isEditing() {
+  if ($('#overlay').classList.contains('show')) return true;
+  const el = document.activeElement;
+  return !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+}
+
+async function reloadForUpdate() {
+  if (sketchCtl) sketchCtl.flush();
+  if (sigCtl) sigCtl.flush();
+  // Never reload over unsaved work: a log with photos can be too big for the
+  // localStorage mirror, so wait for the real write before leaving the page.
+  clearTimeout(saveTimer);
+  try {
+    if (!(await writeState())) return;
+  } catch (err) {
+    console.warn('save before update failed', err);
+    return;
+  }
+  mirrorState();
+  location.reload();
+}
+
+function applyUpdate() {
+  if (!updateReady) return;
+  if (isEditing()) {
+    toast('Update ready', 'Reload', reloadForUpdate);
+    return;
+  }
+  reloadForUpdate();
+}
+
+/* =========================================================================
    Boot
    ========================================================================= */
 
@@ -3900,8 +3951,13 @@ async function boot() {
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) mirrorState();
-    else if (state.settings.keepAwake && !wakeLock) syncWakeLock();
+    if (document.hidden) {
+      mirrorState();
+      return;
+    }
+    if (state.settings.keepAwake && !wakeLock) syncWakeLock();
+    if (updateReady) applyUpdate();
+    else checkForUpdate();
   });
   window.addEventListener('pagehide', mirrorState);
 
@@ -3913,8 +3969,17 @@ async function boot() {
   syncWakeLock();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // A controller at load means this is an update, not the first install.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;
+      updateReady = true;
+      applyUpdate();
+    });
     const register = () => {
-      navigator.serviceWorker.register('./sw.js').catch(err => console.warn('SW registration failed', err));
+      navigator.serviceWorker.register('./sw.js')
+        .then(registration => { swRegistration = registration; })
+        .catch(err => console.warn('SW registration failed', err));
     };
     if (document.readyState === 'complete') register();
     else window.addEventListener('load', register, { once: true });
