@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.3.6';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -862,12 +862,15 @@ function render() {
   else if (activeTab === 'times') view.innerHTML = timesView(log);
   else if (activeTab === 'obs') view.innerHTML = obsView(log);
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
+  else if (activeTab === 'sign') view.innerHTML = signView(log);
 
   updateOutputs();
 
+  // Each drops its controller when its canvas is not on the current tab.
+  setupSketch();
+  setupSignature();
+
   if (activeTab === 'notes') {
-    setupSketch();
-    setupSignature();
     autoGrowAll();
   }
   if (activeTab === 'obs') {
@@ -1168,8 +1171,8 @@ function obsView(log) {
   </div>`;
 }
 
-function signoffHTML(log) {
-  return `<section class="card">
+function signView(log) {
+  return `<div class="stack"><section class="card">
     <div class="card-head">
       <div class="head-left"><h2>Sign-off</h2></div>
       <button class="btn small" data-act="sign-now">Now (UTC)</button>
@@ -1190,7 +1193,7 @@ function signoffHTML(log) {
       <button class="btn small" data-act="clear-sign">Clear signature</button>
     </div>
     <div class="sketch-hint">Sign with a finger or Apple Pencil. The signature is stored only on this device and appears on the printed log.</div>
-  </section>`;
+  </section></div>`;
 }
 
 function notesView(log) {
@@ -1231,8 +1234,6 @@ function notesView(log) {
         Sketches save automatically.
       </div>
     </section>
-
-    ${signoffHTML(log)}
   </div>`;
 }
 
@@ -3526,10 +3527,8 @@ const actions = {
   },
   'toggle-finger': () => {
     state.settings.fingerDraw = !state.settings.fingerDraw;
-    if (activeTab === 'notes') {
-      if (sketchCtl) sketchCtl.flush();
-      if (sigCtl) sigCtl.flush();
-    }
+    if (sketchCtl) sketchCtl.flush();
+    if (sigCtl) sigCtl.flush();
     applyTheme();
     save();
     if ($('#overlay').classList.contains('show')) settingsSheet();
@@ -3574,11 +3573,9 @@ const actions = {
 };
 
 function switchTab(tab) {
-  if (!['log', 'times', 'obs', 'notes'].includes(tab)) return;
-  if (activeTab === 'notes') {
-    if (sketchCtl) sketchCtl.flush();
-    if (sigCtl) sigCtl.flush();
-  }
+  if (!['log', 'times', 'obs', 'notes', 'sign'].includes(tab)) return;
+  if (sketchCtl) sketchCtl.flush();
+  if (sigCtl) sigCtl.flush();
   activeTab = tab;
   render();
   window.scrollTo({ top: 0, behavior: 'auto' });

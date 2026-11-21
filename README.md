@@ -23,7 +23,7 @@ two-page mission log to PDF (long logs can add a continuation page).
 - **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
   finger, with undo and red/black pens.
 - **Observations** — time, Hobbs, position and free text, with optional GPS and up to six camera/library photos per observation.
-- **Sign-off** — printed name, CAPID, UTC date/time and a signature pad.
+- **Sign-off** — its own Sign tab: printed name, CAPID, UTC date/time and a signature pad.
 - **Output** — Print / Save PDF. On iPad this builds a PDF and opens the share sheet (Save to Files or
   Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
 - **Offline** — a service worker caches the whole app. After the first load it works with no
