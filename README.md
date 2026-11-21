@@ -4,7 +4,7 @@ An offline, iPad-first version of the CAP Observer Mission Log kneeboard card. I
 single-page web app, installs to the iPad home screen, autosaves on the device, and prints a
 two-page mission log to PDF (long logs can add a continuation page).
 
-**Live app:** https://cap-efb.github.io/app/
+**Live app:** https://cap-efb.github.io/cap-flight-log/
 
 ## What it does
 
@@ -91,7 +91,7 @@ etc.) — plain `http://192.168.x.x` will not register the service worker or all
 ## Deployment
 
 `main` holds the source. The live site is served from the **`gh-pages`** branch root
-(`CAP-EFB/app`), because the legacy Pages builder on `main` was unreliable after the repo move.
+(`CAP-EFB/cap-flight-log`), because the legacy Pages builder on `main` was unreliable after the repo move.
 
 Edit and commit on `main`, then publish the static files:
 
@@ -103,7 +103,7 @@ git push origin main
 ```
 
 The script copies `index.html`, `app.js`, `styles.css`, `sw.js`, the manifest and `icons/` to
-`gh-pages` and pushes it. Pages then serves `https://cap-efb.github.io/app/`.
+`gh-pages` and pushes it. Pages then serves `https://cap-efb.github.io/cap-flight-log/`.
 
 When you change the app, bump `CACHE` in `sw.js` (for example `observer-log-v1.1.6`) so
 installed copies pick up the new files. The `deploy-pages.sh` script also copies `vendor/`.
