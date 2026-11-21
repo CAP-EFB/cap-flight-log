@@ -1594,6 +1594,32 @@ function setupSignature() {
    Sheets
    ========================================================================= */
 
+/* While a sheet is open the page is taken out of the document flow and held at
+   the offset it was opened from. iOS paints the text caret at a stale position
+   for a field inside a position: fixed container once the page behind it is
+   taller than the viewport (WebKit 176896, regressed on iOS 26 as
+   300690/300952), and every sheet field sits in #overlay. See html.sheet-open
+   in styles.css. */
+let sheetScrollY = null;
+
+function lockPageForSheet() {
+  if (sheetScrollY !== null) return;
+  sheetScrollY = window.scrollY || window.pageYOffset || 0;
+  const app = $('#app');
+  if (app) app.style.top = -sheetScrollY + 'px';
+  document.documentElement.classList.add('sheet-open');
+}
+
+function unlockPageForSheet() {
+  if (sheetScrollY === null) return null;
+  const scrollY = sheetScrollY;
+  sheetScrollY = null;
+  const app = $('#app');
+  if (app) app.style.top = '';
+  document.documentElement.classList.remove('sheet-open');
+  return scrollY;
+}
+
 function openSheet(options) {
   const overlay = $('#overlay');
   if (!overlay) return;
@@ -1612,7 +1638,7 @@ function openSheet(options) {
     ${options.footer ? '<div class="sheet-foot">' + options.footer + '</div>' : ''}
   </div>`;
   overlay.classList.add('show');
-  document.documentElement.classList.add('sheet-open');
+  lockPageForSheet();
 }
 
 function closeSheet() {
@@ -1620,10 +1646,11 @@ function closeSheet() {
   if (!overlay) return;
   overlay.classList.remove('show');
   overlay.innerHTML = '';
-  document.documentElement.classList.remove('sheet-open');
+  const scrollY = unlockPageForSheet();
   const callback = sheetOnClose;
   sheetOnClose = null;
   if (typeof callback === 'function') callback();
+  if (scrollY !== null) requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 function field(label, inner, className) {

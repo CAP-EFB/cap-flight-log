@@ -891,6 +891,15 @@ body.finger-draw #sketch { touch-action: none; }
 }
 .overlay.show { display: flex; }
 
+/* An open sheet freezes the page behind it. iOS paints the text caret at a
+   stale position for any field inside a position: fixed container once the page
+   behind it is taller than the viewport (WebKit 176896, regressed on iOS 26 as
+   300690/300952) — which is every field in a sheet, since they all live in
+   .overlay. Taking #app out of flow keeps the same part of the page on screen
+   (the offset is set inline by openSheet) and stops it scrolling underneath. */
+html.sheet-open body { min-height: 0; padding-bottom: 0; }
+html.sheet-open #app { position: fixed; left: 0; right: 0; }
+
 .sheet {
   width: min(780px, 100%);
   max-height: 92dvh;
@@ -924,7 +933,6 @@ body.finger-draw #sketch { touch-action: none; }
 .sheet-body {
   padding: 16px 18px;
   overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 
