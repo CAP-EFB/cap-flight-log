@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -277,6 +277,22 @@ function gpsStatusText(fix) {
   return 'GPS ±' + Math.round(fix.accuracy) + ' m · ' + fmtZ(hhmmFromMs(fix.at));
 }
 
+/* CAP standard: hemisphere first, degrees and decimal minutes — N 35° 30.00′,
+   W 080° 15.00′. Used for the SAR worksheet's search-area corners whatever the
+   coordinate setting is. */
+function fmtCapCoord(value, isLat) {
+  if (value == null || !Number.isFinite(value)) return '';
+  const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
+  const absolute = Math.abs(value);
+  let deg = Math.floor(absolute);
+  let min = Math.round((absolute - deg) * 6000) / 100;
+  if (min >= 60) {
+    deg += 1;
+    min = 0;
+  }
+  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
+}
+
 function gpsCoordinateValue(value, isLat, format) {
   const defaultHemi = isLat ? 'N' : 'W';
   const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
@@ -498,6 +514,47 @@ function normalizeSar(raw) {
   sar.planned = Object.assign(planned, raw.planned || {});
   sar.actual = Object.assign(actual, raw.actual || {});
   return sar;
+}
+
+function sarHasData(sar) {
+  const filled = value => (value && typeof value === 'object'
+    ? Object.keys(value).some(key => filled(value[key]))
+    : String(value == null ? '' : value).trim() !== '');
+  return filled(sar);
+}
+
+/* The worksheet as plain label/value rows, shared by the PDF and the print view. */
+function sarReport(log) {
+  const sar = log.sar;
+  const coord = (raw, isLat) => {
+    const parsed = isLat ? parseLat(raw) : parseLon(raw);
+    return parsed == null ? String(raw || '').trim() : fmtCapCoord(parsed, isLat);
+  };
+  const cell = (column, key) => {
+    const value = String(column[key] || '').trim();
+    if (!value) return '';
+    if (key === 'pod' && /^\d+(\.\d+)?$/.test(value)) return value + '%';
+    if ((key === 'started' || key === 'ended') && isValidTime(value)) return value + 'Z';
+    return value;
+  };
+  const rated = key => [sar[key], sar[key + 'Score'] ? 'score ' + sar[key + 'Score'] + ' of 5' : '']
+    .filter(Boolean).join(' - ');
+  return {
+    meta: [
+      ['Tracking number', sar.tracking || log.sortie],
+      ['Mission number', log.mission],
+      ['Mission date', sar.missionDate],
+      ['Reporting MO / MP / MS', [sar.reporter, sar.reporterCapid ? 'CAPID ' + sar.reporterCapid : ''].filter(Boolean).join(' - ')],
+      ['Search area name', sar.areaName],
+      ['Grid', log.grid],
+      ['Effectiveness', rated('effectiveness')],
+      ['Visibility', rated('visibility')]
+    ],
+    corners: SAR_CORNERS.map(([key, label]) => [label, coord(sar.corners[key].lat, true), coord(sar.corners[key].lon, false)]),
+    rows: SAR_TEXT_ROWS.concat(SAR_CHOICE_ROWS, SAR_RESULT_ROWS)
+      .map(([key, label]) => [label, cell(sar.planned, key), cell(sar.actual, key)]),
+    comments: String(sar.comments || '').trim()
+  };
 }
 
 function blankLog() {
@@ -1281,14 +1338,25 @@ function sarView(log) {
       <div class="form-grid">
         ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters', placeholder: log.sortie ? 'Sortie ' + log.sortie : 'Sortie number' }))}
         ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters' }))}
-        ${field('Mission date', textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' }))}
+        <label class="field"><span>Mission date</span>
+          <div class="input-btn">
+            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
+            <button type="button" class="mini" data-act="sar-today">Today</button>
+          </div>
+        </label>
         ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
         ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
       </div>
     </section>
 
     <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Search area</h2></div></div>
+      <div class="card-head">
+        <div class="head-left"><h2>Search area</h2></div>
+        <button class="btn small" data-act="sar-import-fpl">Import from ForeFlight</button>
+      </div>
+      <div class="note-strip" style="margin-top:0;margin-bottom:12px">
+        To fill the corners from a ForeFlight search pattern: in ForeFlight open the flight plan, tap Edit, Send To, Share FPL File and save it to Files, then import that file here.
+      </div>
       <div class="form-grid">
         ${field('Name', textInput('sar.areaName', sar.areaName))}
         ${field('Grid', textInput('grid', log.grid, { className: 'mono', autocap: 'characters' }))}
@@ -1296,8 +1364,8 @@ function sarView(log) {
       ${SAR_CORNERS.map(([key, label]) => `
         <div class="subhead">${esc(label)} corner</div>
         <div class="form-grid">
-          ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
-          ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
+          ${capCoordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
+          ${capCoordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
         </div>`).join('')}
     </section>
 
@@ -1321,6 +1389,124 @@ function sarView(log) {
       </label>
     </section>
   </div>`;
+}
+
+/* ---------- ForeFlight search area import ---------- */
+
+/* iPadOS cannot offer a home-screen web app in another app's share sheet, so a
+   ForeFlight plan arrives as the FPL file it shares (Garmin flight plan XML),
+   picked from Files. The search area is taken as the box around the plan's
+   search-pattern waypoints; the sheet shows which waypoints were used so a
+   stray one can be switched off before the corners are filled in. */
+let fplImport = null;
+
+function parseFplWaypoints(text) {
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  if (xml.getElementsByTagName('parsererror').length) throw new Error('not XML');
+  const child = (node, name) => {
+    const el = Array.from(node.children).find(c => c.localName === name);
+    return el ? el.textContent.trim() : '';
+  };
+  const points = Array.from(xml.getElementsByTagName('*'))
+    .filter(node => node.localName === 'waypoint')
+    .map(node => ({
+      id: child(node, 'identifier'),
+      type: child(node, 'type').toUpperCase(),
+      lat: parseFloat(child(node, 'lat')),
+      lon: parseFloat(child(node, 'lon'))
+    }))
+    .filter(pt => Number.isFinite(pt.lat) && Number.isFinite(pt.lon) && Math.abs(pt.lat) <= 90 && Math.abs(pt.lon) <= 180);
+  if (!points.length) throw new Error('no waypoints');
+
+  // Prefer waypoints ForeFlight names as search-pattern points, then user
+  // waypoints (coordinates), then anything that is not an airport.
+  const isSar = pt => /^SAR[-_ ]?\d+/i.test(pt.id);
+  const isUser = pt => pt.type.includes('USER');
+  const isAirport = pt => pt.type === 'AIRPORT';
+  let pick = isSar;
+  let rule = 'search-pattern waypoints (SAR-01, SAR-02, …)';
+  if (points.filter(isSar).length < 2) {
+    pick = isUser;
+    rule = 'coordinate waypoints';
+    if (points.filter(isUser).length < 2) {
+      pick = pt => !isAirport(pt);
+      rule = 'all waypoints except airports';
+    }
+  }
+  points.forEach(pt => { pt.on = pick(pt); });
+  return { points, rule };
+}
+
+function fplCorners(points) {
+  const used = points.filter(pt => pt.on);
+  if (used.length < 2) return null;
+  const lats = used.map(pt => pt.lat);
+  const lons = used.map(pt => pt.lon);
+  const north = Math.max(...lats);
+  const south = Math.min(...lats);
+  const east = Math.max(...lons);
+  const west = Math.min(...lons);
+  if (north === south || east === west) return null;
+  return { nw: [north, west], ne: [north, east], sw: [south, west], se: [south, east] };
+}
+
+function importForeFlightArea() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('cancel', () => input.remove());
+  setTimeout(() => { if (input.isConnected) input.remove(); }, 300000);
+
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const parsed = parseFplWaypoints(await file.text());
+      fplImport = { name: file.name, points: parsed.points, rule: parsed.rule };
+      fplImportSheet();
+    } catch (err) {
+      console.warn('FPL import failed', err);
+      toast('That file is not a ForeFlight FPL flight plan');
+    }
+  });
+  input.click();
+}
+
+function fplImportSheet() {
+  if (!fplImport) return;
+  const corners = fplCorners(fplImport.points);
+  const used = fplImport.points.filter(pt => pt.on).length;
+  const rows = fplImport.points.map((pt, index) => `
+    <button type="button" class="toggle ${pt.on ? 'on' : ''}" data-act="fpl-toggle" data-index="${index}" style="width:100%;justify-content:flex-start;margin-bottom:6px">
+      <span class="tick">✓</span>
+      <span class="mono">${esc(pt.id || 'Waypoint ' + (index + 1))}</span>
+      <span class="muted small mono" style="margin-left:auto">${esc(fmtCapCoord(pt.lat, true))} · ${esc(fmtCapCoord(pt.lon, false))}</span>
+    </button>`).join('');
+  const preview = corners
+    ? SAR_CORNERS.map(([key, label]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(fmtCapCoord(corners[key][0], true))} · ${esc(fmtCapCoord(corners[key][1], false))}</span></div>`).join('')
+    : '<div class="empty"><strong>No area yet</strong>Select at least two waypoints that are not in line.</div>';
+
+  openSheet({
+    title: 'Search area from ForeFlight',
+    sub: fplImport.name,
+    body: `
+      <div class="sheet-section">
+        <h3>Corners</h3>
+        <div class="freq-list">${preview}</div>
+        <div class="sheet-note">The box around the ${used} selected waypoint${used === 1 ? '' : 's'}. These are the pattern's turn points, so the box is the area flown; it sits inside the assigned grid by any buffer set in ForeFlight.</div>
+      </div>
+      <div class="sheet-section">
+        <h3>Waypoints in the plan</h3>
+        <div class="sheet-note" style="margin-bottom:10px">Selected: ${esc(fplImport.rule)}. Tap a waypoint to include or leave it out.</div>
+        ${rows}
+      </div>`,
+    footer: `
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" data-act="fpl-apply" ${corners ? '' : 'disabled'}>Fill corners</button>`,
+    onClose: () => { fplImport = null; render(); }
+  });
 }
 
 function signView(log) {
@@ -1426,8 +1612,11 @@ function updateCoordHelp(input) {
   if (!help) return;
 
   const value = input.value.trim();
+  const capStandard = input.hasAttribute('data-cap-coord');
   if (!value) {
-    help.textContent = state.settings.coordFormat === 'dd'
+    help.textContent = capStandard
+      ? 'Degrees and decimal minutes'
+      : state.settings.coordFormat === 'dd'
       ? 'Decimal degrees or DDMM.mmm'
       : 'DDMM.mmm or decimal degrees';
     help.classList.remove('error');
@@ -1439,7 +1628,7 @@ function updateCoordHelp(input) {
     help.textContent = 'Not a valid ' + (isLat ? 'latitude' : 'longitude');
     help.classList.add('error');
   } else {
-    help.textContent = fmtCoord(parsed, isLat, state.settings.coordFormat);
+    help.textContent = capStandard ? fmtCapCoord(parsed, isLat) : fmtCoord(parsed, isLat, state.settings.coordFormat);
     help.classList.remove('error');
   }
 }
@@ -1808,6 +1997,15 @@ function coordField(label, path, value, isLat) {
     <input class="input mono" data-bind="${esc(path)}" data-coord="${isLat ? 'lat' : 'lon'}"
       data-norm="coord" inputmode="decimal" value="${esc(value)}"
       placeholder="${isLat ? '35 12.345 or 35.2057' : '79 03.210 or -79.0535'}">
+    <div class="coord-help"></div>
+  </label>`;
+}
+
+function capCoordField(label, path, value, isLat) {
+  return `<label class="field"><span>${esc(label)}</span>
+    <input class="input mono" data-bind="${esc(path)}" data-coord="${isLat ? 'lat' : 'lon'}" data-cap-coord
+      data-norm="coord" autocapitalize="characters" value="${esc(value)}"
+      placeholder="${isLat ? 'N 35 30.00' : 'W 080 15.00'}">
     <div class="coord-help"></div>
   </label>`;
 }
@@ -3200,6 +3398,72 @@ function buildPdfBlob() {
   doc.text('Observer Mission Log · ' + mission + ' · Sortie ' + sortie, M, H - 22);
   doc.text('Notes & observations', W - M, H - 22, { align: 'right' });
 
+  // SAR results worksheet (CAPF 104a) — only when something was entered
+  if (sarHasData(log.sar)) {
+    const report = sarReport(log);
+    doc.addPage();
+    pdfHeader(doc, 'SAR Results Worksheet', 'CAPF 104a · ' + mission + ' · Sortie ' + sortie + ' · ' + aircraft, [
+      'Printed ' + printed
+    ]);
+
+    const sarFooter = () => {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100);
+      doc.text(pdfSafe('Observer Mission Log · ' + mission + ' · Sortie ' + sortie), M, H - 22);
+      doc.text('SAR results worksheet', W - M, H - 22, { align: 'right' });
+    };
+    const sarTitle = (text, top) => {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(navy[0], navy[1], navy[2]);
+      doc.text(text, M, top + 6);
+    };
+    const sarTable = (startY, head, body, columnStyles) => {
+      doc.autoTable({
+        startY,
+        margin: { left: M, right: M, top: 40, bottom: 40 },
+        tableWidth: CW,
+        head: head ? [head] : undefined,
+        body: body.map(row => row.map(value => pdfSafe(value))),
+        theme: 'grid',
+        styles: {
+          font: 'helvetica', fontSize: 8, cellPadding: 3.2, textColor: dark,
+          lineColor: [150, 160, 170], lineWidth: 0.4, overflow: 'linebreak'
+        },
+        headStyles: { fillColor: [232, 238, 244], textColor: navy, fontSize: 6.2, fontStyle: 'bold' },
+        columnStyles,
+        didDrawPage: sarFooter
+      });
+      return doc.lastAutoTable.finalY;
+    };
+    const labelCol = { fontStyle: 'bold', textColor: grey, fontSize: 7 };
+
+    let sy = 88;
+    sarTitle('MISSION DATA', sy);
+    const metaRows = [];
+    for (let i = 0; i < report.meta.length; i += 2) {
+      metaRows.push([report.meta[i][0], report.meta[i][1], report.meta[i + 1][0], report.meta[i + 1][1]]);
+    }
+    sy = sarTable(sy + 12, null, metaRows, {
+      0: Object.assign({ cellWidth: 104 }, labelCol), 1: { cellWidth: CW / 2 - 104 },
+      2: Object.assign({ cellWidth: 104 }, labelCol), 3: { cellWidth: CW / 2 - 104 }
+    });
+
+    sarTitle('SEARCH AREA', sy + 10);
+    sy = sarTable(sy + 22, ['CORNER', 'LATITUDE', 'LONGITUDE'], report.corners, {
+      0: Object.assign({ cellWidth: 150 }, labelCol)
+    });
+
+    sarTitle('SORTIE SEARCH PLAN VERSUS ACTUAL', sy + 10);
+    sy = sarTable(sy + 22, ['VARIABLE', 'PLANNED', 'ACTUAL'], report.rows, {
+      0: Object.assign({ cellWidth: 150 }, labelCol)
+    });
+
+    sarTitle('CREW REMARKS & NOTES', sy + 10);
+    sarTable(sy + 22, null, [[report.comments || ' ']], { 0: { minCellHeight: 54 } });
+  }
+
   return doc.output('blob');
 }
 
@@ -3450,7 +3714,58 @@ function buildPrint() {
         <span>Notes &amp; observations</span>
       </div>
     </section>
+    ${sarPrintPage(log, printDate)}
   `;
+}
+
+function sarPrintPage(log, printDate) {
+  if (!sarHasData(log.sar)) return '';
+  const report = sarReport(log);
+  const td = value => `<td>${value ? esc(value) : '&nbsp;'}</td>`;
+  return `
+    <section class="print-page">
+      <div class="p-head">
+        <div class="p-brand">
+          <img class="p-emblem" src="icons/propeller.svg" alt="">
+          <div>
+            <div class="p-title">SAR Results Worksheet</div>
+            <div class="p-sub">CAPF 104a · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</div>
+          </div>
+        </div>
+        <div class="p-head-right"><div><b>Printed</b> ${esc(printDate)}</div></div>
+      </div>
+
+      <div class="p-meta two">${report.meta.map(([label, value]) => `<div class="p-cell wide">
+        <div class="pl">${esc(label)}</div>
+        <div class="pv">${value ? esc(value) : '&nbsp;'}</div>
+      </div>`).join('')}</div>
+
+      <div class="p-section">
+        <div class="p-section-title">Search area</div>
+        <table class="p-table">
+          <thead><tr><th style="width:26%">Corner</th><th>Latitude</th><th>Longitude</th></tr></thead>
+          <tbody>${report.corners.map(row => `<tr>${row.map(td).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+
+      <div class="p-section">
+        <div class="p-section-title">Sortie search plan versus actual</div>
+        <table class="p-table">
+          <thead><tr><th style="width:26%">Variable</th><th>Planned</th><th>Actual</th></tr></thead>
+          <tbody>${report.rows.map(row => `<tr>${row.map(td).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+
+      <div class="p-section">
+        <div class="p-section-title">Crew remarks &amp; notes</div>
+        <div class="p-notes-text">${esc(report.comments)}</div>
+      </div>
+
+      <div class="p-footer">
+        <span>Observer Mission Log · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
+        <span>SAR results worksheet</span>
+      </div>
+    </section>`;
 }
 
 /* =========================================================================
@@ -3700,6 +4015,38 @@ const actions = {
     if ($('#overlay').classList.contains('show')) settingsSheet();
     else if (activeTab === 'notes') render();
   },
+  'sar-import-fpl': () => importForeFlightArea(),
+  'fpl-toggle': el => {
+    if (!fplImport) return;
+    const pt = fplImport.points[Number(el.dataset.index)];
+    if (!pt) return;
+    pt.on = !pt.on;
+    const body = $('#overlay .sheet-body');
+    const scroll = body ? body.scrollTop : 0;
+    fplImportSheet();
+    const next = $('#overlay .sheet-body');
+    if (next) next.scrollTop = scroll;
+  },
+  'fpl-apply': () => {
+    const corners = fplImport && fplCorners(fplImport.points);
+    if (!corners) return;
+    const sar = activeLog().sar;
+    SAR_CORNERS.forEach(([key]) => {
+      sar.corners[key] = { lat: fmtCapCoord(corners[key][0], true), lon: fmtCapCoord(corners[key][1], false) };
+    });
+    save();
+    closeSheet();
+    toast('Search area corners filled from ForeFlight');
+  },
+  'sar-today': () => {
+    // The local calendar date, as it would be written on the paper form.
+    const now = new Date();
+    const value = pad2(now.getDate()) + ' ' + MONTHS[now.getMonth()] + ' ' + String(now.getFullYear()).slice(-2);
+    activeLog().sar.missionDate = value;
+    const input = $('[data-bind="sar.missionDate"]');
+    if (input) input.value = value;
+    save();
+  },
   'sar-choice': el => {
     // Tap the selected option again to clear it.
     const group = el.closest('[data-choice]');
@@ -3829,8 +4176,15 @@ document.addEventListener('change', event => {
   } else if (kind === 'coord') {
     const isLat = el.dataset.coord === 'lat';
     const value = el.value.trim();
-    if (value && (isLat ? parseLat(value) : parseLon(value)) == null) el.classList.add('invalid');
+    const parsed = value ? (isLat ? parseLat(value) : parseLon(value)) : null;
+    if (value && parsed == null) el.classList.add('invalid');
     else el.classList.remove('invalid');
+    if (parsed != null && el.hasAttribute('data-cap-coord')) {
+      // Rewrite a valid entry in CAP standard form once the field is left.
+      el.value = fmtCapCoord(parsed, isLat);
+      setPath(activeLog(), path, el.value);
+      save();
+    }
     updateCoordHelp(el);
   } else if (path === 'settings.opsInterval') {
     let value = Math.round(num(el.value) || 30);
