@@ -93,8 +93,11 @@
 html, body { margin: 0; padding: 0; }
 
 html {
-  /* Shown above the top bar when the page is pulled down. */
-  background: var(--chrome-bg);
+  /* iPadOS tints its top-edge fade with this colour, so it must not be the
+     navy of the bars. Bounce is switched off here (the root scroller) so no
+     strip of it shows above the top bar when the page is pulled down. */
+  background: var(--bg);
+  overscroll-behavior-y: none;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
