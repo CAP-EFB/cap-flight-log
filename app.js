@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.3.9';
+const APP_VERSION = '1.4.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -434,6 +434,72 @@ function emptyTimes() {
   };
 }
 
+/* SAR results worksheet (CAPF 104a): one search area per log. */
+const SAR_CORNERS = [['nw', 'Northwest'], ['ne', 'Northeast'], ['sw', 'Southwest'], ['se', 'Southeast']];
+const SAR_TEXT_ROWS = [
+  ['pattern', 'Search pattern', { autocap: 'characters' }],
+  ['visibility', 'Search visibility (NM)', { inputmode: 'decimal', className: 'mono' }],
+  ['altitude', 'Search altitude (AGL)', { inputmode: 'numeric', className: 'mono' }],
+  ['speed', 'Search speed (knots)', { inputmode: 'numeric', className: 'mono' }],
+  ['spacing', 'Track spacing (NM)', { inputmode: 'decimal', className: 'mono' }]
+];
+const SAR_CHOICE_ROWS = [
+  ['terrain', 'Terrain', ['Flat', 'Rolling Hills', 'Rugged Hills', 'Mountainous']],
+  ['cover', 'Cover', ['Open', 'Moderate', 'Heavy', 'Light Snow', 'Heavy Snow']],
+  ['turbulence', 'Turbulence', ['Light', 'Moderate', 'Heavy']]
+];
+const SAR_RESULT_ROWS = [
+  ['pod', 'Probability of detection', { inputmode: 'numeric', className: 'mono', placeholder: '%' }],
+  ['toArea', 'Time to search area', { className: 'mono', placeholder: 'h:mm' }],
+  ['started', 'Time started search', { className: 'mono', norm: 'time', inputmode: 'numeric', placeholder: 'hhmm Z' }],
+  ['ended', 'Time ended search', { className: 'mono', norm: 'time', inputmode: 'numeric', placeholder: 'hhmm Z' }],
+  ['inArea', 'Time in search area', { className: 'mono', placeholder: 'h:mm' }],
+  ['fromArea', 'Time from search area', { className: 'mono', placeholder: 'h:mm' }],
+  ['total', 'Total sortie time', { className: 'mono', placeholder: 'h:mm' }]
+];
+const SAR_RATINGS = ['Excellent', 'Good', 'Fair', 'Poor'];
+const SAR_SCORES = ['1', '2', '3', '4', '5'];
+
+function blankSarColumn() {
+  const column = {};
+  SAR_TEXT_ROWS.concat(SAR_CHOICE_ROWS, SAR_RESULT_ROWS).forEach(row => { column[row[0]] = ''; });
+  return column;
+}
+
+function blankSar() {
+  const corners = {};
+  SAR_CORNERS.forEach(([key]) => { corners[key] = { lat: '', lon: '' }; });
+  return {
+    tracking: '',
+    missionDate: '',
+    reporter: '',
+    reporterCapid: '',
+    areaName: '',
+    corners,
+    planned: blankSarColumn(),
+    actual: blankSarColumn(),
+    effectiveness: '',
+    effectivenessScore: '',
+    visibility: '',
+    visibilityScore: '',
+    comments: ''
+  };
+}
+
+function normalizeSar(raw) {
+  const sar = blankSar();
+  if (!raw || typeof raw !== 'object') return sar;
+  const corners = sar.corners;
+  const planned = sar.planned;
+  const actual = sar.actual;
+  Object.assign(sar, raw);
+  sar.corners = corners;
+  SAR_CORNERS.forEach(([key]) => { Object.assign(corners[key], (raw.corners && raw.corners[key]) || {}); });
+  sar.planned = Object.assign(planned, raw.planned || {});
+  sar.actual = Object.assign(actual, raw.actual || {});
+  return sar;
+}
+
 function blankLog() {
   return {
     id: uid(),
@@ -464,7 +530,8 @@ function blankLog() {
     notes: '',
     sketch: '',
     observations: [],
-    signoff: { name: '', capid: '', dateTime: '', signature: '' }
+    signoff: { name: '', capid: '', dateTime: '', signature: '' },
+    sar: blankSar()
   };
 }
 
@@ -501,6 +568,7 @@ function normalizeLog(raw) {
   log.crew = Object.assign({ pilot: '', observer: '', ap: '', scanner: '' }, (raw && raw.crew) || {});
   log.radio = Object.assign({ main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' }, (raw && raw.radio) || {});
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
+  log.sar = normalizeSar(raw && raw.sar);
   log.navAids = Array.isArray(raw && raw.navAids) && raw.navAids.length
     ? raw.navAids.map(n => Object.assign({ ident: '', freq: '', radial: '' }, n || {}))
     : base.navAids;
@@ -866,6 +934,7 @@ function render() {
   else if (activeTab === 'times') view.innerHTML = timesView(log);
   else if (activeTab === 'obs') view.innerHTML = obsView(log);
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
+  else if (activeTab === 'sar') view.innerHTML = sarView(log);
   else if (activeTab === 'sign') view.innerHTML = signView(log);
 
   updateOutputs();
@@ -877,7 +946,7 @@ function render() {
   if (activeTab === 'notes') {
     autoGrowAll();
   }
-  if (activeTab === 'obs') {
+  if (activeTab === 'obs' || activeTab === 'sar') {
     autoGrowAll();
   }
 }
@@ -1175,6 +1244,81 @@ function obsView(log) {
         <button class="btn small primary" data-act="add-obs">+ New</button>
       </div>
       ${list || `<div class="empty"><strong>No observations yet</strong>Tap “New” after each sighting. Time, Hobbs and position are filled in for you.</div>`}
+    </section>
+  </div>`;
+}
+
+function sarChoice(path, value, options) {
+  return `<div class="seg wrap" data-choice="${esc(path)}">${options.map(option =>
+    `<button type="button" data-act="sar-choice" data-value="${esc(option)}" class="${value === option ? 'active' : ''}">${esc(option)}</button>`
+  ).join('')}</div>`;
+}
+
+function sarView(log) {
+  const sar = log.sar;
+  const textRow = ([key, label, opts]) => `
+      <div class="sar-label">${esc(label)}</div>
+      <div data-col="Planned">${textInput('sar.planned.' + key, sar.planned[key], opts)}</div>
+      <div data-col="Actual">${textInput('sar.actual.' + key, sar.actual[key], opts)}</div>`;
+  const choiceRow = ([key, label, options]) => `
+      <div class="sar-label">${esc(label)}</div>
+      <div data-col="Planned">${sarChoice('sar.planned.' + key, sar.planned[key], options)}</div>
+      <div data-col="Actual">${sarChoice('sar.actual.' + key, sar.actual[key], options)}</div>`;
+  const rating = (label, key) => `
+      <div class="sar-rating">
+        <div class="sar-label">${esc(label)}</div>
+        ${sarChoice('sar.' + key, sar[key], SAR_RATINGS)}
+        <span class="sar-score-label">Score</span>
+        ${sarChoice('sar.' + key + 'Score', sar[key + 'Score'], SAR_SCORES)}
+      </div>`;
+
+  return `<div class="stack">
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>SAR results worksheet</h2></div>
+        <span class="muted small">CAPF 104a</span>
+      </div>
+      <div class="form-grid">
+        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters', placeholder: log.sortie ? 'Sortie ' + log.sortie : 'Sortie number' }))}
+        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters' }))}
+        ${field('Mission date', textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' }))}
+        ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
+        ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Search area</h2></div></div>
+      <div class="form-grid">
+        ${field('Name', textInput('sar.areaName', sar.areaName))}
+        ${field('Grid', textInput('grid', log.grid, { className: 'mono', autocap: 'characters' }))}
+      </div>
+      ${SAR_CORNERS.map(([key, label]) => `
+        <div class="subhead">${esc(label)} corner</div>
+        <div class="form-grid">
+          ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
+          ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
+        </div>`).join('')}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Search plan versus actual</h2></div></div>
+      <div class="sar-grid">
+        <div class="sar-head"></div><div class="sar-head">Planned</div><div class="sar-head">Actual</div>
+        ${SAR_TEXT_ROWS.map(textRow).join('')}
+        ${SAR_CHOICE_ROWS.map(choiceRow).join('')}
+        ${SAR_RESULT_ROWS.map(textRow).join('')}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Crew remarks &amp; notes</h2></div></div>
+      ${rating('Effectiveness', 'effectiveness')}
+      ${rating('Visibility', 'visibility')}
+      <label class="field" style="margin-top:14px"><span>Written comments</span>
+        <textarea class="input obs-text" data-bind="sar.comments" data-autogrow
+          placeholder="Anything bearing on the results: observer tied up on the radio, a scanner unwell in turbulence, areas not covered.">${esc(sar.comments)}</textarea>
+      </label>
     </section>
   </div>`;
 }
@@ -3556,6 +3700,14 @@ const actions = {
     if ($('#overlay').classList.contains('show')) settingsSheet();
     else if (activeTab === 'notes') render();
   },
+  'sar-choice': el => {
+    // Tap the selected option again to clear it.
+    const group = el.closest('[data-choice]');
+    const value = el.classList.contains('active') ? '' : el.dataset.value;
+    setPath(activeLog(), group.dataset.choice, value);
+    $$('button', group).forEach(btn => btn.classList.toggle('active', btn === el && value !== ''));
+    save();
+  },
   'set-finger-mode': el => {
     const next = el.dataset.value === '1';
     if (state.settings.fingerDraw === next) return;
@@ -3595,7 +3747,7 @@ const actions = {
 };
 
 function switchTab(tab) {
-  if (!['log', 'times', 'obs', 'notes', 'sign'].includes(tab)) return;
+  if (!['log', 'times', 'obs', 'notes', 'sar', 'sign'].includes(tab)) return;
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
   activeTab = tab;

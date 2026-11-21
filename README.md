@@ -23,6 +23,8 @@ two-page mission log to PDF (long logs can add a continuation page).
 - **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
   finger, with undo and red/black pens.
 - **Observations** — time, Hobbs, position and free text, with optional GPS and up to six camera/library photos per observation.
+- **SAR** — the SAR results worksheet (CAPF 104a): search area and corners, search plan versus
+  actual, probability of detection, search times, and crew remarks. Entry only; not yet on the PDF.
 - **Sign-off** — its own Sign tab: printed name, CAPID, UTC date/time and a signature pad.
 - **Output** — Print / Save PDF. On iPad this builds a PDF and opens the share sheet (Save to Files or
   Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
