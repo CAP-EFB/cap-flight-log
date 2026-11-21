@@ -64,7 +64,7 @@ the browser print dialog opens. The PDF has:
 2. Notes, sketch, observations (including photos) and the certification/signature block.
 
 The layout is tuned for US Letter portrait; a long flight log can add a continuation page.
-The app uses an original propeller mark in the app and printed headers.
+The app icon and emblem appear in the app header and on printed headers.
 
 ## Development
 
@@ -90,7 +90,7 @@ etc.) — plain `http://192.168.x.x` will not register the service worker or all
 | `sw.js` | Offline cache (bump `CACHE` when shipping changes) |
 | `vendor/` | Bundled jsPDF + AutoTable for in-app PDF export |
 | `manifest.webmanifest` | Home-screen metadata |
-| `icons/` | App icons and the propeller mark |
+| `icons/` | App icons and the header emblem |
 
 ## Deployment
 
@@ -116,7 +116,8 @@ installed copies pick up the new files. The `deploy-pages.sh` script also copies
 
 This is a personal mission-log tool, not an official Civil Air Patrol product. It is not affiliated
 with or endorsed by Civil Air Patrol, Inc. CAP names and emblems are trademarks of Civil Air Patrol,
-Inc.; this app uses an original propeller mark, not the CAP emblem.
+Inc. The app icon incorporates the CAP propeller-and-triangle emblem, which remains the property of
+Civil Air Patrol, Inc. and is used here to identify a tool made by a member for CAP mission work.
 
 PDF generation uses [jsPDF](https://github.com/parallax/jsPDF) and
 [jsPDF-AutoTable](https://github.com/simonbengtsson/jsPDF-AutoTable), both MIT licensed.
