@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -246,21 +246,34 @@ function parseLon(raw) {
   return parseCoord(raw, false, 'W');
 }
 
-function fmtCoord(value, isLat, format) {
+/* Every coordinate in the app is shown, stored and printed one way: hemisphere,
+   degrees and decimal minutes — N 35° 30.00′, W 080° 15.00′. Entry is looser
+   (see parseCoord); a valid entry is rewritten in this form. */
+function fmtCoord(value, isLat) {
   if (value == null || !Number.isFinite(value)) return '';
   const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
   const absolute = Math.abs(value);
-  if (format === 'dd') return absolute.toFixed(6) + '° ' + hemisphere;
-  const deg = Math.floor(absolute);
-  const min = (absolute - deg) * 60;
-  return deg + '° ' + min.toFixed(3).padStart(6, '0') + '′ ' + hemisphere;
+  let deg = Math.floor(absolute);
+  let min = Math.round((absolute - deg) * 6000) / 100;
+  if (min >= 60) {
+    deg += 1;
+    min = 0;
+  }
+  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
 }
 
-function coordPair(latRaw, lonRaw, format) {
+/* Typed text in standard form when it parses, untouched when it does not. */
+function normCoordText(raw, isLat) {
+  const text = String(raw == null ? '' : raw).trim();
+  const parsed = isLat ? parseLat(text) : parseLon(text);
+  return parsed == null ? text : fmtCoord(parsed, isLat);
+}
+
+function coordPair(latRaw, lonRaw) {
   const lat = parseLat(latRaw);
   const lon = parseLon(lonRaw);
   if (lat == null || lon == null) return '';
-  return fmtCoord(lat, true, format) + '  ' + fmtCoord(lon, false, format);
+  return fmtCoord(lat, true) + '  ' + fmtCoord(lon, false);
 }
 
 /* ---------- GPS ---------- */
@@ -275,44 +288,6 @@ function hhmmFromMs(ms) {
 
 function gpsStatusText(fix) {
   return 'GPS ±' + Math.round(fix.accuracy) + ' m · ' + fmtZ(hhmmFromMs(fix.at));
-}
-
-/* CAP standard: hemisphere first, degrees and decimal minutes — N 35° 30.00′,
-   W 080° 15.00′. Used for the SAR worksheet's search-area corners whatever the
-   coordinate setting is. */
-function fmtCapCoord(value, isLat) {
-  if (value == null || !Number.isFinite(value)) return '';
-  const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
-  const absolute = Math.abs(value);
-  let deg = Math.floor(absolute);
-  let min = Math.round((absolute - deg) * 6000) / 100;
-  if (min >= 60) {
-    deg += 1;
-    min = 0;
-  }
-  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
-}
-
-function gpsCoordinateValue(value, isLat, format) {
-  const defaultHemi = isLat ? 'N' : 'W';
-  const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
-  const absolute = Math.abs(value);
-  let text;
-
-  if (format === 'dd') {
-    text = absolute.toFixed(6);
-  } else {
-    let deg = Math.floor(absolute);
-    let min = (absolute - deg) * 60;
-    if (min >= 59.9995) {
-      deg += 1;
-      min = 0;
-    }
-    text = deg + ' ' + min.toFixed(3).padStart(6, '0');
-  }
-
-  // The form labels are N and W, so omit the matching hemisphere letter.
-  return hemisphere === defaultHemi ? text : text + ' ' + hemisphere;
 }
 
 function requestGps(force) {
@@ -361,8 +336,8 @@ function gpsErrorText(error) {
 
 function fillCoordPair(latInput, lonInput, fix) {
   if (!latInput || !lonInput) return;
-  latInput.value = gpsCoordinateValue(fix.lat, true, state.settings.coordFormat);
-  lonInput.value = gpsCoordinateValue(fix.lon, false, state.settings.coordFormat);
+  latInput.value = fmtCoord(fix.lat, true);
+  lonInput.value = fmtCoord(fix.lon, false);
   latInput.dispatchEvent(new Event('input', { bubbles: true }));
   lonInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
@@ -387,8 +362,8 @@ function reportGpsError(error) {
 }
 
 function applyGpsToObservation(obs, fix, card) {
-  obs.lat = gpsCoordinateValue(fix.lat, true, state.settings.coordFormat);
-  obs.lon = gpsCoordinateValue(fix.lon, false, state.settings.coordFormat);
+  obs.lat = fmtCoord(fix.lat, true);
+  obs.lon = fmtCoord(fix.lon, false);
   obs.gpsAccuracy = Math.round(fix.accuracy);
   obs.gpsTime = fmtZ(hhmmFromMs(fix.at));
 
@@ -405,8 +380,8 @@ function applyGpsToObservation(obs, fix, card) {
 function autoGpsEntry(entry) {
   requestGps(false)
     .then(fix => {
-      entry.lat = gpsCoordinateValue(fix.lat, true, state.settings.coordFormat);
-      entry.lon = gpsCoordinateValue(fix.lon, false, state.settings.coordFormat);
+      entry.lat = fmtCoord(fix.lat, true);
+      entry.lon = fmtCoord(fix.lon, false);
       entry.gpsAccuracy = Math.round(fix.accuracy);
       entry.gpsTime = fmtZ(hhmmFromMs(fix.at));
       save();
@@ -526,10 +501,6 @@ function sarHasData(sar) {
 /* The worksheet as plain label/value rows, shared by the PDF and the print view. */
 function sarReport(log) {
   const sar = log.sar;
-  const coord = (raw, isLat) => {
-    const parsed = isLat ? parseLat(raw) : parseLon(raw);
-    return parsed == null ? String(raw || '').trim() : fmtCapCoord(parsed, isLat);
-  };
   const cell = (column, key) => {
     const value = String(column[key] || '').trim();
     if (!value) return '';
@@ -550,7 +521,7 @@ function sarReport(log) {
       ['Effectiveness', rated('effectiveness')],
       ['Visibility', rated('visibility')]
     ],
-    corners: SAR_CORNERS.map(([key, label]) => [label, coord(sar.corners[key].lat, true), coord(sar.corners[key].lon, false)]),
+    corners: SAR_CORNERS.map(([key, label]) => [label, normCoordText(sar.corners[key].lat, true), normCoordText(sar.corners[key].lon, false)]),
     rows: SAR_TEXT_ROWS.concat(SAR_CHOICE_ROWS, SAR_RESULT_ROWS)
       .map(([key, label]) => [label, cell(sar.planned, key), cell(sar.actual, key)]),
     comments: String(sar.comments || '').trim()
@@ -600,7 +571,6 @@ function newState() {
     activeId: log.id,
     settings: {
       theme: 'auto',
-      coordFormat: 'dm',
       fingerDraw: true,
       fingerDefaultSet: true,
       keepAwake: false,
@@ -670,6 +640,7 @@ function normalizeState(raw) {
   // Finger became the sketch default in 1.3.8. State saved before that carries
   // the old Pencil default, indistinguishable from a choice, so switch it once.
   if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
+  delete normalized.settings.coordFormat;   // the format choice was removed in 1.4.3
   if (!normalized.logs.some(l => l.id === normalized.activeId)) {
     normalized.activeId = normalized.logs[0].id;
   }
@@ -944,7 +915,7 @@ function syncLinkedTime(key, field, value) {
 }
 
 function fmtEntryPosition(entry) {
-  return coordPair(entry.lat, entry.lon, state.settings.coordFormat);
+  return coordPair(entry.lat, entry.lon);
 }
 
 /* =========================================================================
@@ -1266,9 +1237,9 @@ function obsCardHTML(log, obs, index) {
         value="${esc(obs.time)}" placeholder="Time" aria-label="Observation time">
       <input class="input mono centered" data-bind="observations.${index}.hobbs" data-norm="hobbs" inputmode="decimal"
         value="${esc(obs.hobbs)}" placeholder="Hobbs" aria-label="Observation Hobbs">
-      <input class="input mono" data-bind="observations.${index}.lat" data-coord="lat"
+      <input class="input mono" data-bind="observations.${index}.lat" data-coord="lat" data-norm="coord"
         value="${esc(obs.lat)}" placeholder="Latitude N" aria-label="Observation latitude">
-      <input class="input mono" data-bind="observations.${index}.lon" data-coord="lon"
+      <input class="input mono" data-bind="observations.${index}.lon" data-coord="lon" data-norm="coord"
         value="${esc(obs.lon)}" placeholder="Longitude W" aria-label="Observation longitude">
     </div>
     <div class="gps-row">
@@ -1364,9 +1335,12 @@ function sarView(log) {
       ${SAR_CORNERS.map(([key, label]) => `
         <div class="subhead">${esc(label)} corner</div>
         <div class="form-grid">
-          ${capCoordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
-          ${capCoordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
+          ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
+          ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
         </div>`).join('')}
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn small" data-act="sar-clear-corners">Clear corners</button>
+      </div>
     </section>
 
     <section class="card">
@@ -1482,10 +1456,10 @@ function fplImportSheet() {
     <button type="button" class="toggle ${pt.on ? 'on' : ''}" data-act="fpl-toggle" data-index="${index}" style="width:100%;justify-content:flex-start;margin-bottom:6px">
       <span class="tick">✓</span>
       <span class="mono">${esc(pt.id || 'Waypoint ' + (index + 1))}</span>
-      <span class="muted small mono" style="margin-left:auto">${esc(fmtCapCoord(pt.lat, true))} · ${esc(fmtCapCoord(pt.lon, false))}</span>
+      <span class="muted small mono" style="margin-left:auto">${esc(fmtCoord(pt.lat, true))} · ${esc(fmtCoord(pt.lon, false))}</span>
     </button>`).join('');
   const preview = corners
-    ? SAR_CORNERS.map(([key, label]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(fmtCapCoord(corners[key][0], true))} · ${esc(fmtCapCoord(corners[key][1], false))}</span></div>`).join('')
+    ? SAR_CORNERS.map(([key, label]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(fmtCoord(corners[key][0], true))} · ${esc(fmtCoord(corners[key][1], false))}</span></div>`).join('')
     : '<div class="empty"><strong>No area yet</strong>Select at least two waypoints that are not in line.</div>';
 
   openSheet({
@@ -1612,13 +1586,8 @@ function updateCoordHelp(input) {
   if (!help) return;
 
   const value = input.value.trim();
-  const capStandard = input.hasAttribute('data-cap-coord');
   if (!value) {
-    help.textContent = capStandard
-      ? 'Degrees and decimal minutes'
-      : state.settings.coordFormat === 'dd'
-      ? 'Decimal degrees or DDMM.mmm'
-      : 'DDMM.mmm or decimal degrees';
+    help.textContent = 'Degrees and decimal minutes';
     help.classList.remove('error');
     return;
   }
@@ -1628,7 +1597,7 @@ function updateCoordHelp(input) {
     help.textContent = 'Not a valid ' + (isLat ? 'latitude' : 'longitude');
     help.classList.add('error');
   } else {
-    help.textContent = capStandard ? fmtCapCoord(parsed, isLat) : fmtCoord(parsed, isLat, state.settings.coordFormat);
+    help.textContent = fmtCoord(parsed, isLat);
     help.classList.remove('error');
   }
 }
@@ -1996,15 +1965,6 @@ function coordField(label, path, value, isLat) {
   return `<label class="field"><span>${esc(label)}</span>
     <input class="input mono" data-bind="${esc(path)}" data-coord="${isLat ? 'lat' : 'lon'}"
       data-norm="coord" inputmode="decimal" value="${esc(value)}"
-      placeholder="${isLat ? '35 12.345 or 35.2057' : '79 03.210 or -79.0535'}">
-    <div class="coord-help"></div>
-  </label>`;
-}
-
-function capCoordField(label, path, value, isLat) {
-  return `<label class="field"><span>${esc(label)}</span>
-    <input class="input mono" data-bind="${esc(path)}" data-coord="${isLat ? 'lat' : 'lon'}" data-cap-coord
-      data-norm="coord" autocapitalize="characters" value="${esc(value)}"
       placeholder="${isLat ? 'N 35 30.00' : 'W 080 15.00'}">
     <div class="coord-help"></div>
   </label>`;
@@ -2014,7 +1974,7 @@ function sheetCoordField(label, id, value, isLat) {
   return `<label class="field"><span>${esc(label)}</span>
     <input class="input mono" id="${esc(id)}" data-coord="${isLat ? 'lat' : 'lon'}"
       inputmode="decimal" value="${esc(value)}"
-      placeholder="${isLat ? '35 12.345 or 35.2057' : '79 03.210 or -79.0535'}">
+      placeholder="${isLat ? 'N 35 30.00' : 'W 080 15.00'}">
     <div class="coord-help"></div>
   </label>`;
 }
@@ -2255,7 +2215,7 @@ function missionSheet() {
         </div>
       </div>
 
-      <div class="sheet-note">Coordinates accept aviation format (35 12.345) or decimal degrees (35.2057). The N/W labels match the paper form.</div>
+      <div class="sheet-note">Coordinates are kept as degrees and decimal minutes (N 35° 30.00′). Type 35 30.00, 3530.00 or decimal degrees; north and west are assumed unless you add S or E.</div>
     `,
     footer: `<button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
@@ -2338,7 +2298,7 @@ function openEntrySheet(entryId, preset) {
         help.textContent = 'Not a valid ' + (input.dataset.coord === 'lat' ? 'latitude' : 'longitude');
         help.classList.add('error');
       } else {
-        help.textContent = fmtCoord(parsed, input.dataset.coord === 'lat', state.settings.coordFormat);
+        help.textContent = fmtCoord(parsed, input.dataset.coord === 'lat');
         help.classList.remove('error');
       }
     };
@@ -2351,8 +2311,8 @@ function saveEntryFromSheet(entryId) {
   const log = activeLog();
   const time = normTime($('#f-time').value);
   const hobbs = $('#f-hobbs').value.trim();
-  const lat = ($('#f-lat') ? $('#f-lat').value : '').trim();
-  const lon = ($('#f-lon') ? $('#f-lon').value : '').trim();
+  const lat = normCoordText($('#f-lat') ? $('#f-lat').value : '', true);
+  const lon = normCoordText($('#f-lon') ? $('#f-lon').value : '', false);
   const event = $('#f-event').value.trim();
   const note = $('#f-note').value.trim();
   const kind = $('#f-kind').value;
@@ -2498,14 +2458,6 @@ function settingsSheet() {
       </div>
 
       <div class="setting-row">
-        <div class="setting-label">Coordinates<small>How positions print and display</small></div>
-        <div class="seg">
-          <button type="button" data-act="set-coord" data-value="dm" class="${settings.coordFormat === 'dm' ? 'active' : ''}">DD MM.mmm</button>
-          <button type="button" data-act="set-coord" data-value="dd" class="${settings.coordFormat === 'dd' ? 'active' : ''}">Decimal</button>
-        </div>
-      </div>
-
-      <div class="setting-row">
         <div class="setting-label">OPS interval<small>Reminder rhythm on the log tab</small></div>
         <div class="input-btn" style="width:132px">
           <input class="input mono centered" id="ops-interval" data-bind="settings.opsInterval" inputmode="numeric" value="${esc(settings.opsInterval)}">
@@ -2572,7 +2524,7 @@ function helpSheet() {
             <span><strong>OPS rhythm</strong><span class="mi-sub">Record a check every 30 minutes. Fuel and altimeter carry forward; the log tab warns you when one is due.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>Positions</strong><span class="mi-sub">Enter 35 12.345 or 35.2057. Set the display format in Settings. New entries start at your last position.</span></span>
+            <span><strong>Positions</strong><span class="mi-sub">Shown as degrees and decimal minutes (N 35° 30.00′). Type 35 30.00 or decimal degrees. New entries start at your last position.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>GPS positions</strong><span class="mi-sub">Tap “Use GPS” in an entry, observation, or mission sheet. Turn on Auto-capture GPS in Settings to stamp every checkpoint. Allow location when Safari asks; a fix works without a network.</span></span>
@@ -2931,11 +2883,11 @@ function pdfSafe(value) {
     .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u00FF]/g, '');
 }
 
-function pdfCoordPair(latRaw, lonRaw, format) {
+function pdfCoordPair(latRaw, lonRaw) {
   const lat = parseLat(latRaw);
   const lon = parseLon(lonRaw);
   if (lat == null || lon == null) return '';
-  return pdfSafe(fmtCoord(lat, true, format) + ' / ' + fmtCoord(lon, false, format));
+  return pdfSafe(fmtCoord(lat, true) + ' / ' + fmtCoord(lon, false));
 }
 
 function loadImageData(url) {
@@ -3004,7 +2956,6 @@ function buildPdfBlob() {
   const grey = [92, 106, 118];
   const dark = [30, 40, 50];
   const log = activeLog();
-  const fmt = state.settings.coordFormat;
   const totals = timeTotals(log);
   const printed = fmtDateZ(new Date());
   const mission = pdfSafe(log.mission || 'Untitled mission');
@@ -3018,7 +2969,7 @@ function buildPdfBlob() {
 
   let y = 86;
 
-  const coordText = (latRaw, lonRaw) => pdfCoordPair(latRaw, lonRaw, fmt) || '';
+  const coordText = (latRaw, lonRaw) => pdfCoordPair(latRaw, lonRaw) || '';
 
   const meta = [
     ['Mission', mission], ['Sortie', sortie], ['Aircraft N#', aircraft], ['Callsign', pdfSafe(log.callsign)],
@@ -3137,8 +3088,8 @@ function buildPdfBlob() {
   const logRows = log.entries.map(entry => [
     entry.time ? entry.time + 'Z' : '',
     entry.hobbs || '',
-    pdfSafe(fmtCoord(parseLat(entry.lat), true, fmt) || ''),
-    pdfSafe(fmtCoord(parseLon(entry.lon), false, fmt) || ''),
+    pdfSafe(fmtCoord(parseLat(entry.lat), true) || ''),
+    pdfSafe(fmtCoord(parseLon(entry.lon), false) || ''),
     pdfSafe(entry.event || ''),
     pdfSafe(entry.note || '')
   ]);
@@ -3292,7 +3243,7 @@ function buildPdfBlob() {
     const time = obs && obs.time ? obs.time + 'Z' : '______Z';
     const hobbs = obs && obs.hobbs ? obs.hobbs : '______';
     const coords = obs
-      ? (pdfCoordPair(obs.lat, obs.lon, fmt) || '______ N  /  ______ W')
+      ? (pdfCoordPair(obs.lat, obs.lon) || '______ N  /  ______ W')
       : '______ N  /  ______ W';
     const head = 'Obs ' + (i + 1) + '    Time ' + time + '    Hobbs ' + hobbs + '    ' + coords;
     const body = obs ? pdfSafe(obs.text || '') : '';
@@ -3498,14 +3449,13 @@ function resetAll() {
 
 function buildPrint() {
   const log = activeLog();
-  const fmt = state.settings.coordFormat;
   const totals = timeTotals(log);
 
   const coordText = (latRaw, lonRaw) => {
     const lat = parseLat(latRaw);
     const lon = parseLon(lonRaw);
     if (lat == null || lon == null) return '—';
-    return fmtCoord(lat, true, fmt) + ' / ' + fmtCoord(lon, false, fmt);
+    return fmtCoord(lat, true) + ' / ' + fmtCoord(lon, false);
   };
 
   const cell = (label, value, extraClass) => `<div class="p-cell ${extraClass || ''}">
@@ -3553,8 +3503,8 @@ function buildPrint() {
   const entryRows = entries.map(entry => `<tr>
     <td class="c mono">${entry.time ? esc(entry.time + 'Z') : ''}</td>
     <td class="c mono">${esc(entry.hobbs || '')}</td>
-    <td class="c mono">${esc(fmtCoord(parseLat(entry.lat), true, fmt) || '')}</td>
-    <td class="c mono">${esc(fmtCoord(parseLon(entry.lon), false, fmt) || '')}</td>
+    <td class="c mono">${esc(fmtCoord(parseLat(entry.lat), true) || '')}</td>
+    <td class="c mono">${esc(fmtCoord(parseLon(entry.lon), false) || '')}</td>
     <td>${esc(entry.event || '')}</td>
     <td class="remark">${esc(entry.note || '')}</td>
   </tr>`).join('') +
@@ -3578,7 +3528,7 @@ function buildPrint() {
         <b>Obs ${index + 1}</b>
         <span>Time ${obs.time ? esc(obs.time + 'Z') : '________'}</span>
         <span>Hobbs ${esc(obs.hobbs || '________')}</span>
-        <span>${esc(coordPair(obs.lat, obs.lon, fmt) || '________ N  ________ W')}</span>
+        <span>${esc(coordPair(obs.lat, obs.lon) || '________ N  ________ W')}</span>
       </div>
       <div class="p-obs-body">${esc(obs.text || '')}</div>
       ${photos.length ? `<div class="p-obs-photos">${photos.map(src => `<img src="${src}" alt="">`).join('')}</div>` : ''}
@@ -3792,10 +3742,7 @@ const actions = {
   },
   'add-entry': () => openEntrySheet(null),
   'edit-entry': el => openEntrySheet(el.dataset.id),
-  'del-entry': el => {
-    el.stopPropagation();
-    deleteEntry(el.dataset.id);
-  },
+  'del-entry': el => deleteEntry(el.dataset.id),
   'save-entry': el => saveEntryFromSheet(el.dataset.id || null),
   'delete-entry-sheet': el => deleteEntry(el.dataset.id),
   'fill-now': el => {
@@ -3885,8 +3832,8 @@ const actions = {
         event: 'Position',
         time: nowZ(),
         hobbs: lastHobbs(log),
-        lat: gpsCoordinateValue(fix.lat, true, state.settings.coordFormat),
-        lon: gpsCoordinateValue(fix.lon, false, state.settings.coordFormat),
+        lat: fmtCoord(fix.lat, true),
+        lon: fmtCoord(fix.lon, false),
         note: '',
         createdAt: Date.now(),
         gpsAccuracy: Math.round(fix.accuracy),
@@ -3995,11 +3942,6 @@ const actions = {
     save();
     settingsSheet();
   },
-  'set-coord': el => {
-    state.settings.coordFormat = el.dataset.value;
-    save();
-    settingsSheet();
-  },
   'toggle-wake': () => {
     state.settings.keepAwake = !state.settings.keepAwake;
     syncWakeLock();
@@ -4032,11 +3974,24 @@ const actions = {
     if (!corners) return;
     const sar = activeLog().sar;
     SAR_CORNERS.forEach(([key]) => {
-      sar.corners[key] = { lat: fmtCapCoord(corners[key][0], true), lon: fmtCapCoord(corners[key][1], false) };
+      sar.corners[key] = { lat: fmtCoord(corners[key][0], true), lon: fmtCoord(corners[key][1], false) };
     });
     save();
     closeSheet();
     toast('Search area corners filled from ForeFlight');
+  },
+  'sar-clear-corners': () => {
+    const sar = activeLog().sar;
+    const previous = deepClone(sar.corners);
+    if (!sarHasData(previous)) return;
+    sar.corners = blankSar().corners;
+    save();
+    render();
+    toast('Search area corners cleared', 'Undo', () => {
+      sar.corners = previous;
+      save();
+      if (activeTab === 'sar') render();
+    });
   },
   'sar-today': () => {
     // The local calendar date, as it would be written on the paper form.
@@ -4179,9 +4134,9 @@ document.addEventListener('change', event => {
     const parsed = value ? (isLat ? parseLat(value) : parseLon(value)) : null;
     if (value && parsed == null) el.classList.add('invalid');
     else el.classList.remove('invalid');
-    if (parsed != null && el.hasAttribute('data-cap-coord')) {
-      // Rewrite a valid entry in CAP standard form once the field is left.
-      el.value = fmtCapCoord(parsed, isLat);
+    if (parsed != null) {
+      // Rewrite a valid entry in standard form once the field is left.
+      el.value = fmtCoord(parsed, isLat);
       setPath(activeLog(), path, el.value);
       save();
     }
