@@ -93,6 +93,8 @@
 html, body { margin: 0; padding: 0; }
 
 html {
+  /* Shown above the top bar when the page is pulled down. */
+  background: var(--chrome-bg);
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
