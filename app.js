@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.3.6';
+const APP_VERSION = '1.3.8';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -477,7 +477,8 @@ function newState() {
     settings: {
       theme: 'auto',
       coordFormat: 'dm',
-      fingerDraw: false,
+      fingerDraw: true,
+      fingerDefaultSet: true,
       keepAwake: false,
       gpsAuto: false,
       opsInterval: 30,
@@ -541,6 +542,9 @@ function normalizeState(raw) {
     settings: Object.assign(fresh.settings, raw.settings || {}),
     logs: raw.logs.map(normalizeLog)
   };
+  // Finger became the sketch default in 1.3.8. State saved before that carries
+  // the old Pencil default, indistinguishable from a choice, so switch it once.
+  if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
   if (!normalized.logs.some(l => l.id === normalized.activeId)) {
     normalized.activeId = normalized.logs[0].id;
   }
@@ -963,6 +967,27 @@ function entriesHTML(log) {
   return '<div class="entry-list">' + rows + '</div>';
 }
 
+function tachCardHTML(log) {
+  const totals = timeTotals(log);
+  return `<section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Tach &amp; totals</h2></div>
+      </div>
+      <div class="form-grid">
+        <label class="field"><span>Tach start</span>
+          <input class="input mono" data-bind="times.tachStart" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachStart)}" placeholder="e.g. 5123.4">
+        </label>
+        <label class="field"><span>Tach end</span>
+          <input class="input mono" data-bind="times.tachEnd" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachEnd)}" placeholder="e.g. 5124.7">
+        </label>
+      </div>
+      <div class="totals" style="grid-template-columns:1fr 1fr">
+        <div class="total"><div class="tl">Total tach</div><div class="tv" id="tach-card-total">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
+        <div class="total"><div class="tl">Shut-down Hobbs</div><div class="tv" id="tach-card-hobbs">${log.times.shutDown.hobbs ? esc(log.times.shutDown.hobbs) : '—'}</div></div>
+      </div>
+    </section>`;
+}
+
 function logView(log) {
   const showIntro = !state.settings.introDismissed && !log.mission && !log.entries.length;
   return `<div class="stack">
@@ -980,6 +1005,7 @@ function logView(log) {
       </button>
       <div class="gps-hint">${state.settings.gpsAuto ? 'Auto GPS is on — checkpoints and observations capture a position.' : 'Uses the iPad’s GPS to fill latitude and longitude. Tap a checkpoint to log it, or mark a position here.'}</div>
     </section>
+    ${tachCardHTML(log)}
     <section class="card">
       <div class="card-head">
         <div class="head-left">
@@ -1058,24 +1084,6 @@ function timesView(log) {
         <div class="total"><div class="tl">Hobbs used</div><div class="tv" id="tot-hobbs">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
       </div>
       <div class="note-strip">The Now buttons stamp the current UTC time. Editing a time also updates the matching checkpoint in the flight log.</div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Tach &amp; totals</h2></div>
-      </div>
-      <div class="form-grid">
-        <label class="field"><span>Tach start</span>
-          <input class="input mono" data-bind="times.tachStart" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachStart)}" placeholder="e.g. 5123.4">
-        </label>
-        <label class="field"><span>Tach end</span>
-          <input class="input mono" data-bind="times.tachEnd" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachEnd)}" placeholder="e.g. 5124.7">
-        </label>
-      </div>
-      <div class="totals" style="grid-template-columns:1fr 1fr">
-        <div class="total"><div class="tl">Total tach</div><div class="tv" id="tach-card-total">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
-        <div class="total"><div class="tl">Shut-down Hobbs</div><div class="tv" id="tach-card-hobbs">${log.times.shutDown.hobbs ? esc(log.times.shutDown.hobbs) : '—'}</div></div>
-      </div>
     </section>
 
     <section class="card">
@@ -1193,6 +1201,15 @@ function signView(log) {
       <button class="btn small" data-act="clear-sign">Clear signature</button>
     </div>
     <div class="sketch-hint">Sign with a finger or Apple Pencil. The signature is stored only on this device and appears on the printed log.</div>
+  </section>
+  <section class="card">
+    <button class="btn primary" data-act="share-log" style="width:100%">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>
+      </svg>
+      Share signed log (PDF)
+    </button>
+    <div class="sketch-hint">Builds the mission log PDF with this sign-off and opens the share sheet — AirDrop, Mail, Messages or Save to Files.</div>
   </section></div>`;
 }
 
@@ -3505,6 +3522,11 @@ const actions = {
   'settings': () => settingsSheet(),
   'help': () => helpSheet(),
   'print': () => printLog(),
+  'share-log': () => {
+    // Pick up a signature stroke that has not been saved yet.
+    if (sigCtl) sigCtl.flush();
+    exportPdf();
+  },
   'export-json': () => { closeSheet(); exportJSON(); },
   'export-csv': () => { closeSheet(); exportCSV(); },
   'import-json': () => { closeSheet(); importJSON(); },

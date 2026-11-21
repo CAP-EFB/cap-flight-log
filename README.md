@@ -16,8 +16,8 @@ two-page mission log to PDF (long logs can add a continuation page).
 - **GPS** — Use the iPad's location to fill entry/exit points, log entries and observations.
   Optional **Auto-capture GPS** stamps every checkpoint and new observation. Accuracy is stored
   and shown on the entry.
-- **Times** — the six flight times, tach start/end, computed flight time, engine run, tach and
-  Hobbs used.
+- **Times** — the six flight times, computed flight time, engine run, tach and Hobbs used.
+  Tach start/end are entered on the Log tab.
 - **OPS status** — 30-minute checks with time, Hobbs, fuel, altimeter and an OPS-normal flag,
   plus a next-due reminder on the log tab.
 - **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
