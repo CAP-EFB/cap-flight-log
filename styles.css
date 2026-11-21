@@ -879,15 +879,18 @@ body.finger-draw #sketch { touch-action: none; }
 /* ---------- sheets ---------- */
 
 .overlay {
-  position: fixed;
+  /* Absolute, not fixed: an input inside a fixed-position parent gets its caret
+     painted at a stale position on iOS (WebKit 176896, regressed as 300690 and
+     300952), and every sheet field lives in here. An open sheet freezes #app
+     (see below), which leaves the document exactly one viewport tall at scroll
+     0, so absolute covers the same box fixed would. */
+  position: absolute;
   inset: 0;
   z-index: 120;
   display: none;
   align-items: flex-end;
   justify-content: center;
   background: rgba(7, 14, 22, .46);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
 }
 .overlay.show { display: flex; }
 
