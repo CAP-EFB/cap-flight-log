@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.21.0';
+const APP_VERSION = '1.21.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2122,6 +2122,28 @@ function openNewMissionSheet() {
   if (number) setTimeout(() => number.focus(), 60);
 }
 
+// The mission's own details, edited from Missions or the header: shared by every sortie.
+function openMissionSheet() {
+  const log = activeLog();
+  openSheet({
+    title: 'Mission details',
+    sub: 'Shared by every sortie',
+    body: `<div class="form-grid" id="mission-card">
+      ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }), 'span-2')}
+      <label class="field"><span>Mission date</span>
+        <div class="input-btn">
+          ${textInput('sar.missionDate', log.sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
+          <button type="button" class="mini" data-act="sar-today">Today</button>
+        </div>
+      </label>
+      ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
+    </div>`,
+    footer: `<button type="button" class="btn danger" data-act="del-mission">Delete mission</button>
+      <button type="button" class="btn primary" data-close>Done</button>`,
+    onClose: () => render()
+  });
+}
+
 function todayMissionDate() {
   const now = new Date();
   return pad2(now.getDate()) + ' ' + MONTHS[now.getMonth()] + ' ' + String(now.getFullYear()).slice(-2);
@@ -2167,25 +2189,8 @@ function sortieCardRowHTML(l, index) {
 
 // The mission and its sorties: the top of the Sorties tab.
 function missionSectionsHTML(log) {
-  const sar = log.sar;
   const sorties = missionSorties(log).filter(l => l.started);
   return `<button type="button" class="back-link" data-act="show-missions">‹ Missions</button>
-    <section class="card" id="mission-card">
-      <div class="card-head">
-        <div class="head-left"><h2>Mission</h2></div>
-        <span class="muted small">Shared by every sortie</span>
-      </div>
-      <div class="form-grid">
-        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }))}
-        <label class="field"><span>Mission date</span>
-          <div class="input-btn">
-            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
-            <button type="button" class="mini" data-act="sar-today">Today</button>
-          </div>
-        </label>
-        ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
-      </div>
-    </section>
 
     ${sorties.length ? `<section class="card">
       <div class="card-head">
@@ -2198,7 +2203,7 @@ function missionSectionsHTML(log) {
       <p class="sheet-note" style="margin-top:0">A sortie is one flight of this mission. Crew, search area and the rest are set up once it is added.</p>
       <div class="form-grid">
         ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
-        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters' }))}
+        ${field('Tracking number', textInput('sar.tracking', log.sar.tracking, { className: 'mono', autocap: 'characters' }))}
         ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
         ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
       </div>
@@ -4123,6 +4128,7 @@ function deleteMission() {
   if (!state.logs.length) state.logs.push(blankLog());
   state.activeId = state.logs[state.logs.length - 1].id;
   activeTab = 'logbook';
+  closeSheet();
   save();
   render();
   toast('Mission deleted');
@@ -5309,9 +5315,7 @@ const actions = {
   },
   'edit-mission': () => {
     if (!activeLog().missionCreated) { openNewMissionSheet(); return; }
-    switchTab('plan');
-    const number = $('#mission-card [data-bind="mission"]');
-    if (number && !number.value) number.focus();
+    openMissionSheet();
   },
   'show-missions': () => switchTab('logbook'),
   'open-mission': el => {
@@ -5626,8 +5630,7 @@ const actions = {
   },
   'sar-today': () => {
     // The local calendar date, as it would be written on the paper form.
-    const now = new Date();
-    const value = pad2(now.getDate()) + ' ' + MONTHS[now.getMonth()] + ' ' + String(now.getFullYear()).slice(-2);
+    const value = todayMissionDate();
     activeLog().sar.missionDate = value;
     syncMissionField(activeLog(), 'sar.missionDate');
     const input = $('[data-bind="sar.missionDate"]');
