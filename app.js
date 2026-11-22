@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.17.1';
+const APP_VERSION = '1.17.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -835,6 +835,13 @@ function capCellName(lat, lon) {
 const SECTIONAL_TILES = 'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}';
 let positionMap = null;
 
+// The zoom that shows the FAA chart at 100%: one chart pixel per screen pixel.
+// The FAA's most detailed tiles are level 12; a Retina screen draws them one
+// level earlier at half size.
+function chartFullZoom() {
+  return (window.devicePixelRatio || 1) > 1.4 ? 11 : 12;
+}
+
 function positionFixHTML(fix) {
   if (!fix) {
     return `<div class="pos-none">No current GPS fix.${lastGpsFix ? ' Showing the last one, from ' + esc(fmtZ(hhmmFromMs(lastGpsFix.at))) + '.' : ''}</div>`;
@@ -879,7 +886,7 @@ function positionSheet() {
   const retina = (window.devicePixelRatio || 1) > 1.4;
   const map = L.map('pos-map', {
     zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 13, zoomSnap: 1
-  }).setView(center, fix ? 10 : 5);
+  }).setView(center, fix ? chartFullZoom() : 5);
   L.tileLayer(SECTIONAL_TILES, {
     detectRetina: true,
     minNativeZoom: retina ? 7 : 8,
@@ -966,7 +973,7 @@ function drawTrackOnMap(fit) {
     : null;
   if (fit && positionMap.trackLine) {
     positionMap.follow = false;
-    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: 12 });
+    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: chartFullZoom() });
   }
 }
 
@@ -5361,7 +5368,7 @@ const actions = {
     const fix = freshFix() || lastGpsFix;
     if (!positionMap || !fix) return;
     positionMap.follow = true;
-    positionMap.map.setView([fix.lat, fix.lon], Math.max(positionMap.map.getZoom(), 10));
+    positionMap.map.setView([fix.lat, fix.lon], chartFullZoom());
   },
   'track-map': () => {
     positionSheet();
