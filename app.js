@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.17.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -872,10 +872,20 @@ function positionSheet() {
   if (!window.L) return;
   const log = activeLog();
   const center = fix ? [fix.lat, fix.lon] : [39.5, -98.35];
-  const map = L.map('pos-map', { zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 14 })
-    .setView(center, fix ? 10 : 5);
+  // The FAA serves the sectional at tile zooms 8–12; 12 is the chart's own
+  // detail. On a Retina screen each tile is drawn at half size from one zoom
+  // level deeper (detectRetina), so the chart stays sharp instead of being
+  // stretched to twice its pixels.
+  const retina = (window.devicePixelRatio || 1) > 1.4;
+  const map = L.map('pos-map', {
+    zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 13, zoomSnap: 1
+  }).setView(center, fix ? 10 : 5);
   L.tileLayer(SECTIONAL_TILES, {
-    minNativeZoom: 8, maxNativeZoom: 12, minZoom: 5, maxZoom: 14,
+    detectRetina: true,
+    minNativeZoom: retina ? 7 : 8,
+    maxNativeZoom: retina ? 11 : 12,
+    minZoom: 5, maxZoom: 13,
+    keepBuffer: 3,
     attribution: 'FAA AIS · not for navigation'
   }).addTo(map);
   // CAP grid over the chart: 15-minute grid lines with their numbers, and the
@@ -956,7 +966,7 @@ function drawTrackOnMap(fit) {
     : null;
   if (fit && positionMap.trackLine) {
     positionMap.follow = false;
-    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: 11 });
+    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: 12 });
   }
 }
 

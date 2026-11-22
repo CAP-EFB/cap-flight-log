@@ -1286,6 +1286,8 @@ a.menu-item { text-decoration: none; }
   background: #e8edf1;
 }
 .pos-map .leaflet-control-attribution { font-size: 10px; }
+/* no smoothing seams between chart tiles */
+.pos-map .leaflet-tile { image-rendering: auto; outline: 1px solid transparent; }
 /* recording indicator on the Flight track card */
 .rec-dot {
   display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px;
