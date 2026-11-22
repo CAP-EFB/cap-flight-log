@@ -3,7 +3,8 @@ import Foundation
 import ActivityKit
 
 /// What the Lock Screen and Dynamic Island show about the sortie in progress.
-/// This file belongs to both the app and the SortieActivity widget extension:
+/// The app (App/SortieActivityAttributes.swift) and the widget extension
+/// (SortieActivity/SortieActivityAttributes.swift) each compile an identical copy:
 /// the app starts and updates the activity, the extension draws it.
 @available(iOS 16.1, *)
 public struct SortieActivityAttributes: ActivityAttributes {
