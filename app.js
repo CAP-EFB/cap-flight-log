@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.12.1';
+const APP_VERSION = '1.13.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -833,6 +833,8 @@ function blankLog() {
   return {
     id: uid(),
     missionId: uid(),
+    missionCreated: false,   // step 1: the mission exists
+    started: false,          // step 2: this record is a sortie, not just the new mission's placeholder
     createdAt: Date.now(),
     updatedAt: Date.now(),
     mission: '',
@@ -893,6 +895,12 @@ function normalizeLog(raw) {
   log.id = (raw && raw.id) || base.id;
   log.missionId = (raw && raw.missionId) || '';   // filled in by assignMissionIds
   log.receivedFrom = (raw && raw.receivedFrom) || '';
+  // Logs from before 1.13.0 have neither flag: anything with a mission number or
+  // something logged was already a created mission and a started sortie.
+  const hasData = !!(String(log.mission || '').trim() || log.entries.length || log.observations.length ||
+    (log.times.engineStart && log.times.engineStart.time));
+  log.missionCreated = raw && typeof raw.missionCreated === 'boolean' ? raw.missionCreated : hasData;
+  log.started = raw && typeof raw.started === 'boolean' ? raw.started : hasData;
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
   TIME_DEFS.forEach(def => {
     log.times[def.key] = Object.assign({ time: '', hobbs: '' }, log.times[def.key] || {});
@@ -1246,8 +1254,10 @@ function renderStrip() {
   main.textContent = log.mission || 'New Mission';
   // Until the mission has a number, an arrow points at it: that is where to begin.
   const callout = $('#stripCallout');
-  if (callout) callout.hidden = !!log.mission;
+  if (callout) callout.hidden = sortieReady(log);
+  if (callout) callout.textContent = log.missionCreated ? 'Add a sortie' : 'Start Here';
   const sortieBtn = $('#sortieSwitch');
+  if (sortieBtn) sortieBtn.hidden = !sortieReady(log);
   if (sortieBtn) {
     const sorties = missionSorties(log);
     $('#sortieLabel').textContent = sortieLabel(log, sorties.indexOf(log)) +
@@ -1260,6 +1270,8 @@ function renderStrip() {
 }
 
 function renderTabbar() {
+  const bar = $('#tabbar');
+  if (bar) bar.classList.toggle('locked', !sortieReady());
   $$('#tabbar .tab').forEach(btn => {
     const on = btn.dataset.tab === activeTab;
     btn.classList.toggle('active', on);
@@ -1290,8 +1302,10 @@ function render() {
   if (!view) return;
   const log = activeLog();
 
-  if (!TABS.includes(activeTab)) activeTab = defaultTab(log);
-  if (activeTab === 'plan') view.innerHTML = planView(log);
+  if (!TABS.includes(activeTab) && !SCREENS.includes(activeTab)) activeTab = defaultTab(log);
+  if (activeTab === 'missions') view.innerHTML = missionsView();
+  else if (activeTab === 'mission') view.innerHTML = missionView(log);
+  else if (activeTab === 'plan') view.innerHTML = planView(log);
   else if (activeTab === 'fly') view.innerHTML = flyView(log);
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
   else if (activeTab === 'debrief') view.innerHTML = debriefView(log);
@@ -1481,7 +1495,122 @@ const TABS = ['plan', 'fly', 'notes', 'debrief', 'sign'];
 
 // Where a sortie opens: Plan until it has a mission number, then Fly.
 function defaultTab(log) {
-  return (log || activeLog()).mission ? 'fly' : 'plan';
+  const l = log || activeLog();
+  return l.missionCreated && l.started ? 'fly' : 'mission';
+}
+
+// The sortie tabs only open once the mission exists and has a sortie.
+function sortieReady(log) {
+  const l = log || activeLog();
+  return !!(l.missionCreated && l.started);
+}
+
+/* ---------- missions above sorties ----------
+   Missions (every mission on this iPad) → Mission (its shared details and its
+   sorties) → a sortie's tabs. The two mission screens sit above the tab bar's
+   Plan…Sign, which are always about one sortie. */
+const SCREENS = ['missions', 'mission'];
+
+function missionIdsInOrder() {
+  const ids = [];
+  state.logs.slice().sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))
+    .forEach(l => { if (!ids.includes(l.missionId)) ids.push(l.missionId); });
+  return ids;
+}
+
+function showScreen(screen) {
+  if (sketchCtl) sketchCtl.flush();
+  if (sigCtl) sigCtl.flush();
+  closeSheet();
+  activeTab = screen;
+  render();
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function missionsView() {
+  const rows = missionIdsInOrder().map(id => {
+    const sorties = state.logs.filter(l => l.missionId === id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+    const first = sorties[0];
+    const entries = sorties.reduce((n, l) => n + l.entries.length + l.observations.length, 0);
+    const flown = sorties.filter(l => l.started).length;
+    return `<button type="button" class="log-row ${id === activeLog().missionId ? 'active' : ''}" data-act="open-mission" data-id="${esc(id)}">
+      <span class="log-name">${esc(first.mission || 'New Mission')}</span>
+      <span class="log-meta">${esc(first.sar.missionDate || 'no date')} · ${esc(first.base || 'no base')} · ${flown} sortie${flown === 1 ? '' : 's'} · ${entries} logged</span>
+    </button>`;
+  }).join('');
+  return `<div class="stack">
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Missions</h2><span class="count-badge">${missionIdsInOrder().length}</span></div>
+        <button class="btn small primary" data-act="new-log">+ New mission</button>
+      </div>
+      <div class="log-list">${rows}</div>
+      <div class="sheet-note">Everything is stored on this iPad. Open a mission to see and add its sorties.</div>
+    </section>
+  </div>`;
+}
+
+function sortieCardRowHTML(l, index) {
+  const crew = crewInOrder(l).map(m => m.name).filter(Boolean);
+  const times = l.times.engineStart.time
+    ? fmtZ(l.times.engineStart.time) + (l.times.shutDown.time ? '–' + fmtZ(l.times.shutDown.time) : ' →')
+    : 'not flown yet';
+  const signed = l.signoff.signature ? '<span class="sortie-signed">Signed</span>' : '';
+  return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
+    <span class="log-name">${esc(sortieLabel(l, index))} ${signed}</span>
+    <span class="log-meta">${esc(l.aircraft || 'no tail')}${l.callsign ? ' · ' + esc(l.callsign) : ''} · ${esc(times)} · ${l.entries.length + l.observations.length} logged${crew.length ? ' · ' + esc(crew.join(', ')) : ''}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
+  </button>`;
+}
+
+function missionView(log) {
+  const sar = log.sar;
+  const sorties = missionSorties(log).filter(l => l.started);
+  const created = !!log.missionCreated;
+  const step = (n, text, status) => `<div class="step ${status}"><span class="step-num">${status === 'done' ? '✓' : n}</span>${text}</div>`;
+  return `<div class="stack">
+    <button type="button" class="back-link" data-act="show-missions">‹ All missions</button>
+    ${sorties.length ? '' : `<div class="steps">
+      ${step(1, 'Create the mission', created ? 'done' : 'now')}
+      ${step(2, 'Add its first sortie', created ? 'now' : 'later')}
+    </div>`}
+    <section class="card ${created ? '' : 'card-current'}" id="mission-card">
+      <div class="card-head">
+        <div class="head-left"><h2>${created ? 'Mission' : 'Step 1 · Create the mission'}</h2></div>
+        <span class="muted small">Shared by every sortie</span>
+      </div>
+      <div class="form-grid">
+        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }))}
+        <label class="field"><span>Mission date</span>
+          <div class="input-btn">
+            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
+            <button type="button" class="mini" data-act="sar-today">Today</button>
+          </div>
+        </label>
+        ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
+      </div>
+      ${created ? '' : `<div class="btn-row" style="margin-top:14px">
+        <button class="btn primary" data-act="create-mission">Create mission</button>
+        <span class="sheet-note" style="margin:0;align-self:center">The mission number is required. Date and base can be added later.</span>
+      </div>`}
+    </section>
+
+    ${!created ? '' : sorties.length ? `<section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Sorties</h2><span class="count-badge">${sorties.length}</span></div>
+        <button class="btn small primary" data-act="add-sortie">+ Sortie</button>
+      </div>
+      <div class="log-list">${sorties.map(sortieCardRowHTML).join('')}</div>
+      <div class="sheet-note">Tap a sortie to open it. + Sortie starts the next one with the same crew, aircraft, frequencies and search area.</div>
+    </section>` : `<section class="card card-current">
+      <div class="card-head"><div class="head-left"><h2>Step 2 · Add the first sortie</h2></div></div>
+      <p class="sheet-note" style="margin-top:0">A sortie is one flight of this mission. Its crew, aircraft, search area, checkpoints and sign-off are set up on the tabs below once it exists.</p>
+      <button class="btn primary" data-act="add-sortie">+ First sortie</button>
+    </section>`}
+
+    ${created ? `<div class="btn-row">
+      <button class="btn small danger" data-act="del-mission">Delete mission</button>
+    </div>` : ''}
+  </div>`;
 }
 
 function opsCardHTML(log) {
@@ -1551,27 +1680,10 @@ function planView(log) {
   </div>`).join('');
 
   return `<div class="stack">
-    <section class="card" id="mission-card">
-      <div class="card-head">
-        <div class="head-left"><h2>Mission</h2></div>
-        <span class="muted small">Shared by every sortie</span>
-      </div>
-      <div class="form-grid">
-        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }))}
-        <label class="field"><span>Mission date</span>
-          <div class="input-btn">
-            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
-            <button type="button" class="mini" data-act="sar-today">Today</button>
-          </div>
-        </label>
-        ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
-      </div>
-    </section>
-
     <section class="card">
       <div class="card-head">
         <div class="head-left"><h2>Sortie</h2></div>
-        <span class="muted small">This sortie only</span>
+        <button class="btn small" data-act="edit-mission">Mission ${esc(log.mission || 'details')} ›</button>
       </div>
       <div class="form-grid">
         ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
@@ -2968,27 +3080,15 @@ function deleteEntry(entryId) {
 
 function menuSheet() {
   const log = activeLog();
-  // missions in the order they were started, each with its sorties
-  const missionIds = [];
-  state.logs.forEach(l => { if (!missionIds.includes(l.missionId)) missionIds.push(l.missionId); });
-  const logRows = missionIds.map(id => {
-    const sorties = state.logs.filter(l => l.missionId === id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
-    return `<div class="mission-group ${id === log.missionId ? 'active' : ''}">
-      <div class="mission-group-name">${esc(sorties[0].mission || 'New Mission')}</div>
-      ${sorties.map(sortieRowHTML).join('')}
-    </div>`;
-  }).join('');
-
   openSheet({
     title: 'Logs & data',
     body: `
       <div class="sheet-section">
         <h3>Missions</h3>
-        <div class="log-list">${logRows}</div>
         <div class="btn-row">
+          <button type="button" class="btn small" data-act="show-missions">All missions (${missionIdsInOrder().length})</button>
+          <button type="button" class="btn small" data-act="edit-mission">This mission</button>
           <button type="button" class="btn small" data-act="new-log">+ New mission</button>
-          <button type="button" class="btn small" data-act="add-sortie">+ Sortie</button>
-          <button type="button" class="btn small danger" data-act="del-log">Delete sortie</button>
         </div>
       </div>
 
@@ -3297,7 +3397,7 @@ function switchLog(id) {
    Each log is one sortie. Sorties that share a missionId belong to one mission,
    and the mission-level fields below are kept the same on all of them. */
 
-const MISSION_FIELDS = ['mission', 'base', 'sar.missionDate', 'signoff.name', 'signoff.capid'];
+const MISSION_FIELDS = ['mission', 'base', 'sar.missionDate', 'signoff.name', 'signoff.capid', 'missionCreated'];
 
 function missionSorties(log) {
   const l = log || activeLog();
@@ -3353,7 +3453,7 @@ function createLog() {
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
-  activeTab = defaultTab();
+  activeTab = 'mission';
   save();
   render();
   toast('New mission started');
@@ -3362,10 +3462,31 @@ function createLog() {
 // The next sortie of this mission: same crew, aircraft, frequencies and search
 // area; times, Hobbs, entries, observations and results start empty.
 function addSortie() {
-  const source = activeLog();
+  const current = activeLog();
+  if (!current.missionCreated) {
+    showScreen('mission');
+    toast('Create the mission first');
+    return;
+  }
+  const placeholder = missionSorties(current).find(l => !l.started);
+  if (placeholder) {
+    placeholder.started = true;
+    if (!placeholder.sortie) placeholder.sortie = '1';
+    state.activeId = placeholder.id;
+    closeSheet();
+    activeTab = 'plan';
+    save();
+    render();
+    window.scrollTo(0, 0);
+    toast('Sortie 1 added · set up its crew, aircraft and search area');
+    return;
+  }
+  const source = current;
   const sorties = missionSorties(source);
   const log = blankLog();
   log.missionId = source.missionId;
+  log.missionCreated = true;
+  log.started = true;
   ['mission', 'base', 'capFlight', 'aircraft', 'callsign', 'sectional', 'grid', 'altitude', 'airspeed']
     .forEach(key => { log[key] = source[key]; });
   log.crew = deepClone(source.crew).map(m => Object.assign(m, { id: uid() }));
@@ -3381,11 +3502,25 @@ function addSortie() {
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
-  activeTab = defaultTab();
+  activeTab = 'plan';   // check the copied crew, aircraft and search area
   save();
   render();
   window.scrollTo(0, 0);
   toast(sortieLabel(log, sorties.length) + ' started · crew, aircraft and search area copied');
+}
+
+function deleteMission() {
+  const log = activeLog();
+  const sorties = missionSorties(log);
+  if (!confirm('Delete mission ' + (log.mission || '(no number)') + ' and its ' + sorties.length + ' sortie' +
+    (sorties.length === 1 ? '' : 's') + '? This cannot be undone.')) return;
+  state.logs = state.logs.filter(l => l.missionId !== log.missionId);
+  if (!state.logs.length) state.logs.push(blankLog());
+  state.activeId = state.logs[state.logs.length - 1].id;
+  activeTab = state.logs.length === 1 && !state.logs[0].mission ? 'mission' : 'missions';
+  save();
+  render();
+  toast('Mission deleted');
 }
 
 function deleteLog() {
@@ -4564,9 +4699,32 @@ const actions = {
     toast('Find the steps later under Menu → Help & install');
   },
   'edit-mission': () => {
-    switchTab('plan');
+    showScreen('mission');
     const number = $('#mission-card [data-bind="mission"]');
     if (number && !number.value) number.focus();
+  },
+  'show-missions': () => showScreen('missions'),
+  'open-mission': el => {
+    const sorties = state.logs.filter(l => l.missionId === el.dataset.id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+    if (!sorties.length) return;
+    state.activeId = sorties[sorties.length - 1].id;
+    save();
+    showScreen('mission');
+  },
+  'del-mission': () => deleteMission(),
+  'create-mission': () => {
+    const log = activeLog();
+    const number = $('#mission-card [data-bind="mission"]');
+    if (!String(log.mission || '').trim()) {
+      if (number) { number.classList.add('invalid'); number.focus(); }
+      toast('Enter the mission number first');
+      return;
+    }
+    log.missionCreated = true;
+    syncMissionField(log, 'missionCreated');
+    save();
+    render();
+    toast('Mission created · now add its first sortie');
   },
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
@@ -4887,6 +5045,12 @@ const actions = {
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) return;
+  // A sortie's tabs stay shut until the mission exists and has a sortie.
+  if (!sortieReady()) {
+    showScreen('mission');
+    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Create the mission first');
+    return;
+  }
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
   activeTab = tab;
@@ -5246,6 +5410,7 @@ async function boot() {
   }
 
   state = loaded ? normalizeState(loaded) : newState();
+  activeTab = defaultTab();
   applyTheme();
   render();
   if (termsNeeded()) termsSheet(true);

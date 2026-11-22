@@ -10,7 +10,9 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes → Debrief → Sign**.
 
-- **Missions and sorties** — a mission holds one or more sorties. The header's sortie switcher (or
+- **Missions and sorties** — a mission holds one or more sorties. A new mission is set up in two steps on
+  the Mission screen: create the mission (number required), then add its first sortie; the sortie tabs open
+  after that. The logo opens the list of all missions. The header's sortie switcher (or
   Menu → + Sortie) starts the next sortie with the same crew, aircraft, frequencies and search area;
   mission number, base, mission date and your name and CAPID are shared by every sortie.
 - **Plan** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,

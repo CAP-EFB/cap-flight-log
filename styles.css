@@ -167,7 +167,7 @@ h1, h2, h3, p { margin: 0; }
   gap: 12px;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
 
 .brand-icon {
   width: 34px; height: 34px;
@@ -1200,6 +1200,41 @@ a.menu-item { text-decoration: none; }
 }
 .mission-group.active .mission-group-name { color: var(--blue); }
 .sortie-row { padding-left: 16px; }
+.sortie-signed {
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: var(--green-soft); color: var(--green); font-size: 11px; font-weight: 700;
+}
+/* the two steps of a new mission */
+.steps { display: flex; gap: 10px; flex-wrap: wrap; }
+.step {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px 7px 7px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  font-size: 13.5px; font-weight: 650;
+}
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--card-2); color: var(--muted); font-size: 12px; font-weight: 800;
+}
+.step.done { color: var(--green); }
+.step.done .step-num { background: var(--green-soft); color: var(--green); }
+.step.now { color: var(--text); border-color: var(--blue); }
+.step.now .step-num { background: var(--blue-btn); color: #fff; }
+.sortie-switch[hidden] { display: none; }
+.card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
+/* sortie tabs stay shut until the mission has a sortie */
+.tabbar.locked .tab { opacity: .38; }
+
+.back-link {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 650;
+  padding: 4px 2px;
+  cursor: pointer;
+}
 .log-name { font-size: 14.5px; font-weight: 650; }
 .log-meta { font-size: 11.5px; color: var(--muted); }
 
