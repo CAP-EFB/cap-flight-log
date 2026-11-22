@@ -112,7 +112,7 @@ npm run open         # open ios/App in Xcode, then build and run on a simulator 
 ```
 
 Run `npm run sync` after every change to `index.html`, `app.js`, `styles.css`, `icons/` or `vendor/`.
-App ID: `io.github.capefb.missionlog`. Location, camera and photo permission texts are in
+App ID: `io.missionlog.app`. Location, camera and photo permission texts are in
 `ios/App/App/Info.plist`.
 
 ## Deployment

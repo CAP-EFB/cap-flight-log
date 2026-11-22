@@ -1,5 +1,5 @@
 {
-  "appId": "io.github.capefb.missionlog",
+  "appId": "io.missionlog.app",
   "appName": "Mission Log",
   "webDir": "www",
   "ios": {
