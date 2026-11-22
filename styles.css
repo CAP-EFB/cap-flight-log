@@ -158,7 +158,7 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .topbar-row {
-  max-width: 1020px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 4px 16px 8px;
   display: flex;
@@ -278,9 +278,8 @@ h1, h2, h3, p { margin: 0; }
   gap: 6px;
 }
 .mission-strip {
-  flex: none;
-  max-width: 45%;
-  min-width: 0;
+  /* shrinks no further than "Start Here" plus a little of the name */
+  flex: 0 1 auto;
   min-height: 42px;
   display: flex;
   align-items: center;
@@ -372,12 +371,19 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* Narrow screens: the mission line drops under the app name. */
-@media (max-width: 700px) {
-  .topbar-row { flex-wrap: wrap; row-gap: 2px; }
+/* Below a wide landscape iPad the bar takes two rows: logo, GPS and buttons on
+   top; mission, sortie and crew underneath with the full width to themselves. */
+@media (max-width: 1199px) {
+  .topbar-row { flex-wrap: wrap; row-gap: 0; padding-bottom: 4px; }
   .brand { flex: 1; }
   .brand-pipe { display: none; }
-  .mission-bar { order: 3; flex-basis: 100%; }
-  .mission-strip { padding-left: 0; }
+  .mission-bar {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0 -6px;
+    padding-top: 2px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+  }
 }
 
 /* ---------- layout ---------- */
