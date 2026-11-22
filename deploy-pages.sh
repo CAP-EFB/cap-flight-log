@@ -18,7 +18,7 @@ git add -A
 if git diff --cached --quiet; then
   echo "No static-file changes to deploy."
 else
-  git commit -m "Deploy Observer Log $(date '+%Y-%m-%d %H:%M')"
+  git commit -m "Deploy CAP Flight Log $(date '+%Y-%m-%d %H:%M')"
   git push origin HEAD:gh-pages
 fi
 cd - >/dev/null

@@ -1,4 +1,4 @@
-# Observer Log
+# CAP Flight Log
 
 An offline, iPad-first version of the CAP Observer Mission Log kneeboard card. It runs as a
 single-page web app, installs to the iPad home screen, autosaves on the device, and prints a
@@ -12,7 +12,7 @@ two-page mission log to PDF (long logs can add a continuation page).
   altitude/airspeed, entry/exit points, crew and radios.
 - **Checkpoints** — Engine Start, Wheels Up, In Area, On Target, Out of Area, Wheels Down,
   Shut Down and Custom entries. Each tap stamps the current UTC time and carries Hobbs and
-  the last position forward.
+  the last position forward. A large keypad then asks for the Hobbs reading (switch it off in Settings).
 - **GPS** — Use the iPad's location to fill entry/exit points, log entries and observations.
   Optional **Auto-capture GPS** stamps every checkpoint and new observation. Accuracy is stored
   and shown on the entry.
@@ -32,7 +32,7 @@ two-page mission log to PDF (long logs can add a continuation page).
   Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
 - **Disclaimer & terms** — shown on first use and must be accepted to continue; available afterwards
   from the menu.
-- **Feedback** — Menu → Send feedback opens an email to the developer.
+- **Feedback** — Menu → Send feedback opens the feedback form (https://forms.gle/EBEkXN8LNWNPL8VG7).
 - **Offline** — a service worker caches the whole app. After the first load it works with no
   signal. Data never leaves the iPad unless you export it.
 
@@ -104,7 +104,7 @@ Edit and commit on `main`, then publish the static files:
 
 ```sh
 git add .
-git commit -m "Observer Log 1.3.0"
+git commit -m "CAP Flight Log 1.3.0"
 git push origin main
 ./deploy-pages.sh
 ```

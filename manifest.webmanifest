@@ -1,6 +1,6 @@
 {
-  "name": "Observer Mission Log",
-  "short_name": "Observer Log",
+  "name": "CAP Flight Log",
+  "short_name": "CAP Flight Log",
   "description": "Offline CAP observer mission log, checkpoint timer, OPS checks, notes, sketch pad and printable PDF.",
   "start_url": "./",
   "scope": "./",
