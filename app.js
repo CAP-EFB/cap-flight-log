@@ -1,11 +1,11 @@
 'use strict';
 
 /* =========================================================================
-   Observer Log — offline CAP observer mission log
+   CAP Flight Log — offline CAP observer mission log
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -202,6 +202,13 @@ function parseCoord(raw, isLat, defaultHemisphere) {
     deg = parseFloat(parts[0]);
     min = parseFloat(parts[1]);
     if (!Number.isFinite(deg) || !Number.isFinite(min)) return null;
+    if (parts.length > 3) return null;
+    if (parts.length === 3) {
+      // degrees, minutes and seconds, e.g. 35 30 15
+      const sec = parseFloat(parts[2]);
+      if (!Number.isFinite(sec) || sec < 0 || sec >= 60 || min !== Math.trunc(min)) return null;
+      min += sec / 60;
+    }
     if (deg < 0) {
       sign = -1;
       explicitSign = true;
@@ -260,6 +267,34 @@ function fmtCoord(value, isLat) {
     min = 0;
   }
   return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
+}
+
+/* The same position the other two ways a GPS or chart may show it: signed
+   decimal degrees, and degrees, minutes and seconds. */
+function fmtCoordDecimal(value) {
+  return value.toFixed(5) + '°';
+}
+
+function fmtCoordDms(value, isLat) {
+  const hemisphere = isLat ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
+  const tenths = Math.round(Math.abs(value) * 36000);          // tenths of a second
+  const deg = Math.floor(tenths / 36000);
+  const min = Math.floor((tenths - deg * 36000) / 600);
+  const sec = (tenths - deg * 36000 - min * 600) / 10;
+  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + pad2(min) + '′ ' +
+    sec.toFixed(1).padStart(4, '0') + '″';
+}
+
+/* Help line under a coordinate field: every format the field is not already showing. */
+function coordHelpText(raw, isLat) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return { text: 'Decimal minutes, decimal degrees or D M S', error: false };
+  const parsed = isLat ? parseLat(text) : parseLon(text);
+  if (parsed == null) return { text: 'Not a valid ' + (isLat ? 'latitude' : 'longitude'), error: true };
+  const standard = fmtCoord(parsed, isLat);
+  const parts = [fmtCoordDecimal(parsed), fmtCoordDms(parsed, isLat)];
+  if (text !== standard) parts.unshift(standard);
+  return { text: parts.join('  ·  '), error: false };
 }
 
 /* Typed text in standard form when it parses, untouched when it does not. */
@@ -327,7 +362,7 @@ function gpsErrorText(error) {
   if (error && error.unsupported) return 'This browser does not support location.';
   const code = error && error.code;
   if (code === 1) {
-    return 'Location permission denied. Turn on Location Services for Safari or Observer Log in iPad Settings.';
+    return 'Location permission denied. Turn on Location Services for Safari or CAP Flight Log in iPad Settings.';
   }
   if (code === 3) return 'GPS timed out. Move into the open and try again.';
   if (code === 2) return 'Location unavailable. Check that Location Services is on, then try again.';
@@ -385,7 +420,7 @@ function autoGpsEntry(entry) {
       entry.gpsAccuracy = Math.round(fix.accuracy);
       entry.gpsTime = fmtZ(hhmmFromMs(fix.at));
       save();
-      if (activeTab === 'log' && !$('#overlay').classList.contains('show')) render();
+      if (activeTab === 'log' && !$('#overlay').classList.contains('show')) renderWhenIdle();
     })
     .catch(reportGpsError);
 }
@@ -577,6 +612,7 @@ function newState() {
       gpsAuto: false,
       opsInterval: 30,
       introDismissed: false,
+      hobbsPrompt: true,
       termsAccepted: 0,
       termsAcceptedAt: 0
     },
@@ -952,8 +988,23 @@ function renderTabbar() {
   });
 }
 
+/* A redraw replaces the fields on screen, which closes the keyboard. Background
+   work (a GPS fix arriving) waits until nothing in the view is being typed in. */
+let renderPending = false;
+
+function fieldFocusedInView() {
+  const el = document.activeElement;
+  return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && el.closest('#view'));
+}
+
+function renderWhenIdle() {
+  if (fieldFocusedInView()) renderPending = true;
+  else render();
+}
+
 function render() {
   if (!state) return;
+  renderPending = false;
   renderStrip();
   renderTabbar();
   const view = $('#view');
@@ -1587,21 +1638,9 @@ function updateCoordHelp(input) {
   const help = field.querySelector('.coord-help');
   if (!help) return;
 
-  const value = input.value.trim();
-  if (!value) {
-    help.textContent = 'Degrees and decimal minutes';
-    help.classList.remove('error');
-    return;
-  }
-  const isLat = input.dataset.coord === 'lat';
-  const parsed = isLat ? parseLat(value) : parseLon(value);
-  if (parsed == null) {
-    help.textContent = 'Not a valid ' + (isLat ? 'latitude' : 'longitude');
-    help.classList.add('error');
-  } else {
-    help.textContent = fmtCoord(parsed, isLat);
-    help.classList.remove('error');
-  }
+  const info = coordHelpText(input.value, input.dataset.coord === 'lat');
+  help.textContent = info.text;
+  help.classList.toggle('error', info.error);
 }
 
 function updateToolbarState() {
@@ -1956,14 +1995,8 @@ function closeSheet() {
    Disclaimer & terms
    ========================================================================= */
 
-const FEEDBACK_EMAIL = 'thomas.vandevelde@mawg.cap.gov';
-
-// Opens the device's mail app with the version filled in; nothing is sent by the app itself.
-function feedbackHref() {
-  const subject = 'Observer Log feedback (v' + APP_VERSION + ')';
-  const body = '\n\n\n— Observer Log v' + APP_VERSION;
-  return 'mailto:' + FEEDBACK_EMAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-}
+// Issues, comments and ideas go to this form.
+const FEEDBACK_URL = 'https://forms.gle/EBEkXN8LNWNPL8VG7';
 
 // Raise this when the text below changes in substance: everyone is asked again.
 const TERMS_VERSION = 1;
@@ -1975,7 +2008,7 @@ function termsNeeded() {
 function termsHTML() {
   return `<div class="terms">
     <h3>Disclaimer</h3>
-    <p><strong>Not an official Civil Air Patrol product.</strong> Observer Log is a personal tool made by a
+    <p><strong>Not an official Civil Air Patrol product.</strong> CAP Flight Log is a personal tool made by a
       CAP member. It is not affiliated with, endorsed by, or supported by Civil Air Patrol, Inc. or the
       United States Air Force.</p>
     <p><strong>Not for navigation.</strong> This app is not a certified electronic flight bag and must not
@@ -2312,6 +2345,94 @@ function missionSheet() {
   });
 }
 
+/* ---------- Hobbs keypad ---------- */
+
+const KEYPAD_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'];
+
+// Large keys that type into the input matched by `target`.
+function keypadHTML(target) {
+  const key = (k, label, cls) =>
+    `<button type="button" class="key ${cls || ''}" data-act="keypad" data-key="${k}" data-target="${esc(target)}">${label}</button>`;
+  return `<div class="keypad">
+    ${KEYPAD_KEYS.map(k => key(k, k === 'back' ? '⌫' : k, k === 'back' ? 'aux' : '')).join('')}
+    ${key('minus', '−0.1', 'aux')}${key('clear', 'Clear', 'aux')}${key('plus', '+0.1', 'aux')}
+  </div>`;
+}
+
+// A prefilled value is "fresh": the first digit replaces it, as on a calculator,
+// while ⌫ and ±0.1 adjust it.
+function setKeypadFresh(input, fresh) {
+  input.dataset.fresh = fresh ? '1' : '0';
+  input.classList.toggle('fresh', !!fresh && !!input.value);
+}
+
+function keypadPress(target, key) {
+  const input = $(target);
+  if (!input) return;
+  let value = input.value;
+  const fresh = input.dataset.fresh === '1';
+  const decimals = value.includes('.') ? value.split('.')[1].length : 0;
+
+  if (key === 'plus' || key === 'minus') {
+    const current = num(value);
+    if (current == null) return;
+    value = Math.max(0, current + (key === 'plus' ? 0.1 : -0.1)).toFixed(Math.max(1, decimals));
+  } else if (key === 'clear') {
+    value = '';
+  } else if (key === 'back') {
+    value = value.slice(0, -1);
+  } else if (key === '.') {
+    if (fresh || !value) value = '0.';
+    else if (!value.includes('.')) value += '.';
+  } else if (fresh) {
+    value = key;
+  } else if (value.length < 8 && !(value.includes('.') && decimals >= 2)) {
+    value += key;
+  }
+
+  input.value = value;
+  setKeypadFresh(input, false);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Asked straight after a checkpoint is stamped, so Hobbs goes in with big keys.
+function hobbsSheet(entryId) {
+  const entry = activeLog().entries.find(e => e.id === entryId);
+  if (!entry) return;
+  openSheet({
+    title: 'Hobbs',
+    sub: entry.event + ' · ' + fmtZ(entry.time),
+    body: `
+      <input class="input hobbs-big mono" id="k-hobbs" inputmode="none" autocomplete="off"
+        aria-label="Hobbs" value="${esc(entry.hobbs)}" placeholder="0.0">
+      ${keypadHTML('#k-hobbs')}
+      <div class="sheet-note" style="text-align:center">Type the reading, or adjust the last one with ±0.1.</div>
+    `,
+    footer: `<button type="button" class="btn" data-close>Skip</button>
+      <button type="button" class="btn primary" data-act="save-hobbs" data-id="${esc(entry.id)}">Save</button>`,
+    onClose: () => render()
+  });
+  setKeypadFresh($('#k-hobbs'), true);
+}
+
+function saveHobbsFromSheet(entryId) {
+  const log = activeLog();
+  const input = $('#k-hobbs');
+  const value = input ? input.value.trim().replace(/\.$/, '') : '';
+  if (value && num(value) == null) {
+    toast('Enter a valid Hobbs reading');
+    return;
+  }
+  const entry = log.entries.find(e => e.id === entryId);
+  if (entry) {
+    entry.hobbs = value;
+    const timeKey = KIND_TO_TIMEKEY[entry.kind];
+    if (timeKey && log.times[timeKey]) log.times[timeKey].hobbs = value;
+    save();
+  }
+  closeSheet();
+}
+
 function openEntrySheet(entryId, preset) {
   const log = activeLog();
   const existing = entryId ? log.entries.find(e => e.id === entryId) : null;
@@ -2343,11 +2464,13 @@ function openEntrySheet(entryId, preset) {
         </label>
         <label class="field"><span>Hobbs</span>
           <div class="input-btn">
-            <input class="input hobbs mono" id="f-hobbs" inputmode="decimal" value="${esc(entry.hobbs)}" placeholder="1234.5">
+            <input class="input hobbs mono" id="f-hobbs" inputmode="${existing ? 'decimal' : 'none'}" value="${esc(entry.hobbs)}" placeholder="1234.5">
             <button type="button" class="mini" data-act="fill-last-hobbs" data-target="#f-hobbs">Last</button>
+            <button type="button" class="mini ${existing ? '' : 'on'}" data-act="toggle-keypad" data-target="#f-hobbs" data-panel="#f-keypad">Keypad</button>
           </div>
         </label>
       </div>
+      <div id="f-keypad" ${existing ? 'hidden' : ''}>${keypadHTML('#f-hobbs')}</div>
       <div class="form-grid" style="margin-top:12px">
         ${sheetCoordField('Latitude N', 'f-lat', entry.lat, true)}
         ${sheetCoordField('Longitude W', 'f-lon', entry.lon, false)}
@@ -2376,21 +2499,20 @@ function openEntrySheet(entryId, preset) {
     onClose: null
   });
 
+  const hobbsInput = $('#f-hobbs');
+  if (hobbsInput) {
+    setKeypadFresh(hobbsInput, !existing);
+    hobbsInput.addEventListener('keydown', () => setKeypadFresh(hobbsInput, false));   // hardware keyboard
+  }
+
   // Wire the sheet-local coordinate helpers (these fields are not live-bound).
   $$('#overlay [data-coord]').forEach(input => {
     const help = input.parentElement.querySelector('.coord-help');
     if (!help) return;
     const update = () => {
-      const raw = input.value.trim();
-      if (!raw) { help.textContent = ''; help.classList.remove('error'); return; }
-      const parsed = input.dataset.coord === 'lat' ? parseLat(raw) : parseLon(raw);
-      if (parsed == null) {
-        help.textContent = 'Not a valid ' + (input.dataset.coord === 'lat' ? 'latitude' : 'longitude');
-        help.classList.add('error');
-      } else {
-        help.textContent = fmtCoord(parsed, input.dataset.coord === 'lat');
-        help.classList.remove('error');
-      }
+      const info = coordHelpText(input.value, input.dataset.coord === 'lat');
+      help.textContent = info.text;
+      help.classList.toggle('error', info.error);
     };
     input.addEventListener('input', update);
     update();
@@ -2524,14 +2646,14 @@ function menuSheet() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
             <span>Disclaimer &amp; terms<span class="mi-sub">Not for navigation, no warranty</span></span>
           </button>
-          <a class="menu-item" href="${esc(feedbackHref())}">
+          <a class="menu-item" href="${esc(FEEDBACK_URL)}" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></svg>
-            <span>Send feedback<span class="mi-sub">Email a problem or idea to ${esc(FEEDBACK_EMAIL)}</span></span>
+            <span>Send feedback<span class="mi-sub">Report an issue, comment or idea (opens a form, needs a connection)</span></span>
           </a>
         </div>
       </div>
 
-      <div class="sheet-note">Observer Log v${APP_VERSION} · ${state.logs.reduce((n, l) => n + l.entries.length, 0)} entries across ${state.logs.length} log${state.logs.length === 1 ? '' : 's'}. Data never leaves this iPad unless you export it.</div>
+      <div class="sheet-note">CAP Flight Log v${APP_VERSION} · ${state.logs.reduce((n, l) => n + l.entries.length, 0)} entries across ${state.logs.length} log${state.logs.length === 1 ? '' : 's'}. Data never leaves this iPad unless you export it.</div>
     `,
     footer: `<button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
@@ -2578,6 +2700,13 @@ function settingsSheet() {
       </div>
 
       <div class="setting-row">
+        <div class="setting-label">Hobbs keypad<small>Ask for Hobbs after each checkpoint</small></div>
+        <button type="button" class="toggle ${settings.hobbsPrompt ? 'on' : ''}" data-act="toggle-hobbs-prompt">
+          <span class="tick">✓</span> ${settings.hobbsPrompt ? 'On' : 'Off'}
+        </button>
+      </div>
+
+      <div class="setting-row">
         <div class="setting-label">Finger drawing<small>Off means one finger scrolls the sketch</small></div>
         <button type="button" class="toggle ${settings.fingerDraw ? 'on' : ''}" data-act="toggle-finger">
           <span class="tick">✓</span> ${settings.fingerDraw ? 'On' : 'Off'}
@@ -2616,13 +2745,13 @@ function helpSheet() {
         <h3>In the air</h3>
         <div class="menu-list">
           <div class="menu-item" style="cursor:default">
-            <span><strong>Checkpoint buttons</strong><span class="mi-sub">Tap Engine Start, Wheels Up, In Area, etc. Time and Hobbs are filled in. Tap again to edit.</span></span>
+            <span><strong>Checkpoint buttons</strong><span class="mi-sub">Tap Engine Start, Wheels Up, In Area, etc. The time is stamped and a keypad asks for Hobbs, starting from the last reading. Tap the checkpoint again to edit it.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>OPS rhythm</strong><span class="mi-sub">Record a check every 30 minutes. Fuel and altimeter carry forward; the log tab warns you when one is due.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>Positions</strong><span class="mi-sub">Shown as degrees and decimal minutes (N 35° 30.00′). Type 35 30.00 or decimal degrees. New entries start at your last position.</span></span>
+            <span><strong>Positions</strong><span class="mi-sub">Stored as degrees and decimal minutes (N 35° 30.00′). Type them that way, as decimal degrees (35.5) or as degrees, minutes and seconds (35 30 00); the line under each field shows the other formats. New entries start at your last position.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>GPS positions</strong><span class="mi-sub">Tap “Use GPS” in an entry, observation, or mission sheet. Turn on Auto-capture GPS in Settings to stamp every checkpoint. Allow location when Safari asks; a fix works without a network.</span></span>
@@ -2659,7 +2788,7 @@ function helpSheet() {
         </p>
       </div>
 
-      <div class="sheet-note" style="text-align:center;margin-top:20px">Observer Log v${APP_VERSION}</div>
+      <div class="sheet-note" style="text-align:center;margin-top:20px">CAP Flight Log v${APP_VERSION}</div>
     `,
     footer: `<button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
@@ -2699,6 +2828,7 @@ function quickLog(kind, label) {
   save();
   render();
   if (state.settings.gpsAuto) autoGpsEntry(entry);
+  if (state.settings.hobbsPrompt) hobbsSheet(entry.id);
   toast(label + ' logged at ' + fmtZ(entry.time), 'Undo', () => {
     log.entries = log.entries.filter(e => e.id !== entry.id);
     log.times = beforeTimes;
@@ -2821,7 +2951,7 @@ function exportName(extension) {
   const log = activeLog();
   const d = new Date();
   const date = d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate());
-  return 'observer-log_' + slug(log.mission) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
+  return 'cap-flight-log_' + slug(log.mission) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
 }
 
 async function shareFile(filename, blob) {
@@ -2851,7 +2981,7 @@ async function shareFile(filename, blob) {
 
 function exportJSON() {
   const payload = {
-    app: 'Observer Log',
+    app: 'CAP Flight Log',
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
@@ -3859,8 +3989,26 @@ const actions = {
     const target = $(el.dataset.target);
     if (target) {
       target.value = lastHobbs(activeLog());
+      setKeypadFresh(target, true);
       target.dispatchEvent(new Event('input', { bubbles: true }));
     }
+  },
+  'keypad': el => keypadPress(el.dataset.target, el.dataset.key),
+  'toggle-keypad': el => {
+    const panel = $(el.dataset.panel);
+    const target = $(el.dataset.target);
+    if (!panel || !target) return;
+    panel.hidden = !panel.hidden;
+    el.classList.toggle('on', !panel.hidden);
+    // With the keypad up, keep the system keyboard down.
+    target.setAttribute('inputmode', panel.hidden ? 'decimal' : 'none');
+    if (panel.hidden) target.focus(); else target.blur();
+  },
+  'save-hobbs': el => saveHobbsFromSheet(el.dataset.id),
+  'toggle-hobbs-prompt': () => {
+    state.settings.hobbsPrompt = !state.settings.hobbsPrompt;
+    save();
+    settingsSheet();
   },
   'copy-entry': () => {
     const log = activeLog();
@@ -3944,7 +4092,7 @@ const actions = {
       };
       log.entries.push(entry);
       save();
-      render();
+      renderWhenIdle();
       toast('Position marked · ±' + Math.round(fix.accuracy) + ' m', 'Details', () => openEntrySheet(entry.id));
     } catch (err) {
       toast(gpsErrorText(err));
@@ -4254,6 +4402,15 @@ document.addEventListener('change', event => {
     save();
     render();
   }
+});
+
+document.addEventListener('focusout', () => {
+  if (!renderPending) return;
+  setTimeout(() => {
+    if (!renderPending || fieldFocusedInView()) return;
+    if ($('#overlay').classList.contains('show')) return;   // the sheet redraws when it closes
+    render();
+  }, 0);
 });
 
 document.addEventListener('keydown', event => {

@@ -1056,6 +1056,43 @@ a.menu-item { text-decoration: none; }
 .seg button.active { background: var(--blue-btn); color: #fff; }
 .seg.wrap { display: flex; flex-wrap: wrap; }
 
+/* ---------- Hobbs keypad ---------- */
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-width: 380px;
+  margin: 12px auto 0;
+}
+.key {
+  min-height: 60px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.key:active { background: var(--blue-soft); transform: scale(.97); }
+.key.aux { font-size: 16px; font-weight: 700; color: var(--blue); }
+.input.hobbs-big {
+  display: block;
+  max-width: 380px;
+  min-height: 68px;
+  margin: 0 auto;
+  font-size: 36px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: .03em;
+}
+/* a carried-forward reading that the next digit will replace */
+.input.fresh { background: var(--blue-soft); border-color: var(--blue); }
+
 /* ---------- disclaimer & terms ---------- */
 
 .terms h3 {
