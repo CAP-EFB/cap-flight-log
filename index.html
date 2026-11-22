@@ -27,11 +27,17 @@
           <img class="brand-logo" src="icons/logo.png" alt="Mission Log" width="148" height="46">
         </div>
         <span class="brand-pipe" aria-hidden="true"></span>
-        <button class="mission-strip" type="button" data-act="edit-mission" aria-label="Edit mission details">
-          <span class="mission-strip-main" id="stripMain">New Mission</span>
-          <span class="start-here" id="stripCallout">Start Here</span>
-          <span class="mission-strip-sub" id="stripSub"></span>
-        </button>
+        <div class="mission-bar">
+          <button class="mission-strip" type="button" data-act="edit-mission" aria-label="Edit mission details">
+            <span class="mission-strip-main" id="stripMain">New Mission</span>
+            <span class="start-here" id="stripCallout">Start Here</span>
+          </button>
+          <button class="sortie-switch" id="sortieSwitch" type="button" data-act="sortie-menu" aria-label="Switch or add sortie">
+            <span id="sortieLabel">Sortie 1</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="mission-strip-sub" id="stripSub" type="button" data-act="edit-mission" aria-label="Edit mission details"></button>
+        </div>
         <div class="top-actions">
           <button class="gps-chip" id="gpsChip" type="button" data-act="gps-chip" data-level="off" aria-label="GPS status">
             <span class="gps-pos mono" id="gpsPos" hidden></span>

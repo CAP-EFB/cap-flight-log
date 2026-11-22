@@ -269,13 +269,21 @@ h1, h2, h3, p { margin: 0; }
   height: 30px;
   background: rgba(255, 255, 255, .28);
 }
-.mission-strip {
+/* mission number, sortie switcher, then callsign and crew */
+.mission-bar {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mission-strip {
+  flex: none;
+  max-width: 45%;
   min-width: 0;
   min-height: 42px;
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
   padding: 4px 6px;
   border: 0;
   border-radius: 8px;
@@ -284,24 +292,48 @@ h1, h2, h3, p { margin: 0; }
   text-align: left;
   cursor: pointer;
 }
-.mission-strip:active { background: var(--card-2); }
+.mission-strip:active, .mission-strip-sub:active { background: var(--card-2); }
 .mission-strip-main {
-  flex: none;
-  max-width: 45%;
+  min-width: 0;
   font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.sortie-switch {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 8px 0 10px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .07);
+  color: var(--chrome-text);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sortie-switch svg { width: 14px; height: 14px; color: var(--chrome-muted); }
+.sortie-switch:active { background: var(--chrome-press); }
 .mission-strip-sub {
   flex: 1;
   min-width: 0;
+  min-height: 42px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   font-size: 14px;
   color: var(--muted);
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
 }
 
 /* "Start Here" callout: a pill with an arrowhead pointing back at New Mission. */
@@ -344,7 +376,8 @@ h1, h2, h3, p { margin: 0; }
   .topbar-row { flex-wrap: wrap; row-gap: 2px; }
   .brand { flex: 1; }
   .brand-pipe { display: none; }
-  .mission-strip { order: 3; flex-basis: 100%; padding-left: 0; }
+  .mission-bar { order: 3; flex-basis: 100%; }
+  .mission-strip { padding-left: 0; }
 }
 
 /* ---------- layout ---------- */
@@ -1137,6 +1170,13 @@ a.menu-item { text-decoration: none; }
   cursor: pointer;
 }
 .log-row.active { border-color: var(--blue); background: var(--blue-soft); }
+.mission-group { display: flex; flex-direction: column; gap: 6px; }
+.mission-group + .mission-group { margin-top: 8px; }
+.mission-group-name {
+  font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.mission-group.active .mission-group-name { color: var(--blue); }
+.sortie-row { padding-left: 16px; }
 .log-name { font-size: 14.5px; font-weight: 650; }
 .log-meta { font-size: 11.5px; color: var(--muted); }
 

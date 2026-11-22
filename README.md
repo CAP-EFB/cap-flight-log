@@ -8,8 +8,11 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 ## What it does
 
+- **Missions and sorties** — a mission holds one or more sorties. The header's sortie switcher (or
+  Menu → + Sortie) starts the next sortie with the same crew, aircraft, frequencies and search area;
+  mission number, base, mission date and your name and CAPID are shared by every sortie.
 - **Mission details** — mission, sortie, aircraft, callsign, base, CAP flight, sectional, grid,
-  altitude/airspeed, entry/exit points, crew and radios.
+  altitude/airspeed, crew and radios.
 - **Checkpoints** — Engine Start, Wheels Up, In Area, On Target, Out of Area, Wheels Down,
   Shut Down and Custom entries. Each tap stamps the current UTC time and carries Hobbs and
   the last position forward. A large keypad then asks for the Hobbs reading (switch it off in Settings).
@@ -25,7 +28,7 @@ two-page mission log to PDF (long logs can add a continuation page).
 - **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
   finger, with undo and red/black pens.
 - **Observations** — time, Hobbs, position and free text, with optional GPS and up to six camera/library photos per observation.
-- **SAR** — the SAR results worksheet (CAPF 104a): search area and corners, search plan versus
+- **SAR** — the SAR results worksheet (CAPF 104a): search area, corners and entry/exit points, search plan versus
   actual, probability of detection, search times, and crew remarks. Adds a worksheet page to the PDF and
   printout when anything is entered. The search-area corners can be filled from a ForeFlight FPL file
   (Send To → Share FPL File → Save to Files → Import from ForeFlight).
