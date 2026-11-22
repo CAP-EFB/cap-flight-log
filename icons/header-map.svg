@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 160" width="600" height="160">
+  <!-- Faint chart texture for the top bar. Tiles left to right: every line that
+       crosses the tile leaves and enters at the same height, running level. -->
+  <g fill="none" stroke="#8fc3f2" stroke-linecap="round">
+    <!-- graticule -->
+    <g stroke-opacity=".055" stroke-width="1">
+      <path d="M60 0v160M180 0v160M300 0v160M420 0v160M540 0v160"/>
+      <path d="M0 20h600M0 80h600M0 140h600"/>
+    </g>
+    <!-- contour lines -->
+    <g stroke-opacity=".15" stroke-width="1">
+      <path d="M0 14C70 14 120 2 210 6S330 30 420 22S560 14 600 14"/>
+      <path d="M0 30C80 30 130 16 220 20S340 48 430 38S560 30 600 30"/>
+      <path d="M0 48C90 48 140 34 225 38S345 68 440 56S560 48 600 48"/>
+      <path d="M0 70C70 70 110 58 190 64S300 94 380 88S540 70 600 70"/>
+      <path d="M0 96C60 96 90 88 150 92S250 122 330 118S530 96 600 96"/>
+      <path d="M0 128C80 128 120 118 200 124S320 150 400 144S540 128 600 128"/>
+    </g>
+    <!-- a hill and a hollow, as closed contours -->
+    <g stroke-opacity=".13" stroke-width="1">
+      <path d="M476 44c22-8 52-4 60 8s-8 24-32 26-48-4-52-14 6-14 24-20Z"/>
+      <path d="M486 50c14-5 32-2 37 5s-6 14-20 15-28-3-30-9 3-8 13-11Z"/>
+      <path d="M496 56c7-2 15-1 17 2s-3 6-9 6-12-1-13-4 1-3 5-4Z"/>
+      <path d="M96 100c16-8 44-6 52 4s-4 20-26 22-40-4-44-12 4-8 18-14Z"/>
+      <path d="M106 106c9-4 24-3 28 2s-3 10-14 11-21-2-23-6 2-4 9-7Z"/>
+    </g>
+    <!-- a river -->
+    <path stroke="#4ea8f5" stroke-opacity=".16" stroke-width="1.6"
+      d="M0 58C50 58 70 78 120 76S190 52 250 60S330 108 400 104S470 74 520 78S570 58 600 58"/>
+  </g>
+</svg>

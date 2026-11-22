@@ -1,11 +1,11 @@
 'use strict';
 
 /* =========================================================================
-   CAP Flight Log — offline CAP observer mission log
+   Mission Log — offline CAP observer mission log
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.8.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -29,15 +29,22 @@ const KIND_TO_TIMEKEY = {
   'shut-down': 'shutDown'
 };
 
+// Checkpoint buttons, in flight order. `icon` is the inside of a 24×24 stroked SVG.
 const QUICK = [
-  { kind: 'engine-start', label: 'Engine Start' },
-  { kind: 'wheels-up',    label: 'Wheels Up' },
-  { kind: 'in-area',      label: 'In Area' },
-  { kind: 'on-target',    label: 'On Target' },
-  { kind: 'out-of-area',  label: 'Out of Area' },
-  { kind: 'wheels-down',  label: 'Wheels Down' },
-  { kind: 'shut-down',    label: 'Shut Down' },
-  { kind: '',             label: 'Custom' }
+  { kind: 'engine-start', label: 'Engine Start',   // power symbol
+    icon: '<path d="M12 3v8"/><path d="M7.1 6.6a7.5 7.5 0 1 0 9.8 0"/>' },
+  { kind: 'wheels-up',    label: 'Wheels Up',      // climbing away from the runway
+    icon: '<path d="M3 20h18"/><path d="M5 16 18 6"/><path d="M11.5 5.5H18.5V12.5"/>' },
+  { kind: 'in-area',      label: 'In Area',        // arrow into the search box
+    icon: '<path d="M13 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/><path d="M3 12h11"/><path d="m10 8 4 4-4 4"/>' },
+  { kind: 'on-target',    label: 'On Target',      // crosshair
+    icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>' },
+  { kind: 'out-of-area',  label: 'Out of Area',    // arrow leaving the search box
+    icon: '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5"/><path d="M10 12h11"/><path d="m17 8 4 4-4 4"/>' },
+  { kind: 'wheels-down',  label: 'Wheels Down',    // descending to the runway
+    icon: '<path d="M3 20h18"/><path d="M5 5 18 15"/><path d="M18.5 8.5V15.5H11.5"/>' },
+  { kind: 'shut-down',    label: 'Shut Down',      // stop
+    icon: '<circle cx="12" cy="12" r="9"/><rect x="8.5" y="8.5" width="7" height="7" rx="1"/>' }
 ];
 
 const STANDARD_FREQS = [
@@ -254,7 +261,8 @@ function parseLon(raw) {
 }
 
 /* Every coordinate in the app is shown, stored and printed one way: hemisphere,
-   degrees and decimal minutes — N 35° 30.00′, W 080° 15.00′. Entry is looser
+   degrees and decimal minutes — N 35° 30.00′, W 80° 15.00′ (longitude degrees are not
+   padded to three digits). Entry is looser
    (see parseCoord); a valid entry is rewritten in this form. */
 function fmtCoord(value, isLat) {
   if (value == null || !Number.isFinite(value)) return '';
@@ -266,7 +274,7 @@ function fmtCoord(value, isLat) {
     deg += 1;
     min = 0;
   }
-  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
+  return hemisphere + ' ' + String(deg).padStart(2, '0') + '° ' + min.toFixed(2).padStart(5, '0') + '′';
 }
 
 /* The same position the other two ways a GPS or chart may show it: signed
@@ -281,7 +289,7 @@ function fmtCoordDms(value, isLat) {
   const deg = Math.floor(tenths / 36000);
   const min = Math.floor((tenths - deg * 36000) / 600);
   const sec = (tenths - deg * 36000 - min * 600) / 10;
-  return hemisphere + ' ' + String(deg).padStart(isLat ? 2 : 3, '0') + '° ' + pad2(min) + '′ ' +
+  return hemisphere + ' ' + String(deg).padStart(2, '0') + '° ' + pad2(min) + '′ ' +
     sec.toFixed(1).padStart(4, '0') + '″';
 }
 
@@ -346,6 +354,7 @@ function requestGps(force) {
           accuracy: position.coords.accuracy,
           at: position.timestamp || Date.now()
         };
+        fix.seen = Date.now();
         lastGpsFix = fix;
         resolve(fix);
       },
@@ -355,6 +364,159 @@ function requestGps(force) {
   });
 }
 
+/* ---------- live GPS ----------
+   While it is switched on, the app keeps listening for positions so the header
+   can show whether there is a fix and how good it is, and so new entries start
+   at the current position. */
+
+const GPS_FRESH_MS = 20000;
+let gpsWatchId = null;
+let gpsState = 'off';   // off | searching | on | denied | unavailable
+
+// The live position, if one arrived recently enough to call current.
+function freshFix() {
+  return lastGpsFix && Date.now() - (lastGpsFix.seen || lastGpsFix.at) < GPS_FRESH_MS ? lastGpsFix : null;
+}
+
+function startGpsWatch() {
+  if (gpsWatchId != null) return;
+  if (!navigator.geolocation || !window.isSecureContext) {
+    gpsState = 'unavailable';
+    renderGpsChip();
+    return;
+  }
+  gpsState = 'searching';
+  renderGpsChip();
+  gpsWatchId = navigator.geolocation.watchPosition(
+    position => {
+      lastGpsFix = {
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+        at: position.timestamp || Date.now(),
+        seen: Date.now()
+      };
+      gpsState = 'on';
+      renderGpsChip();
+    },
+    error => {
+      if (error && error.code === 1) {
+        stopGpsWatch();
+        gpsState = 'denied';
+      } else if (gpsState !== 'on') {
+        gpsState = 'searching';
+      }
+      renderGpsChip();
+    },
+    { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
+  );
+}
+
+function stopGpsWatch() {
+  if (gpsWatchId != null && navigator.geolocation) navigator.geolocation.clearWatch(gpsWatchId);
+  gpsWatchId = null;
+  gpsState = 'off';
+  renderGpsChip();
+}
+
+/* ---------- CAP conventional grid ----------
+   Sectional grid limits from the CAP Mission Aircrew Reference Text, Volume I
+   (June 2024), Table 8-1: [id, north, south, west, east] in degrees, west
+   longitudes positive. Each chart is cut into 15-minute grids numbered from 1 at
+   its north-west corner, eastwards along a row, then the next row south. Where
+   two charts overlap, the western-most chart's numbers are the ones used. */
+const CAP_SECTIONALS = [
+  ['SEA', 49, 44.5, 125, 117], ['GTF', 49, 44.5, 117, 109], ['BIL', 49, 44.5, 109, 101],
+  ['MSP', 49, 44.5, 101, 93], ['GRB', 48.25, 44, 93, 85], ['LHN', 48, 44, 85, 77],
+  ['MON', 48, 44, 77, 69], ['HFX', 48, 44, 69, 61], ['LMT', 44.5, 40, 125, 117],
+  ['SLC', 44.5, 40, 117, 109], ['CYS', 44.5, 40, 109, 101], ['OMA', 44.5, 40, 101, 93],
+  ['ORD', 44, 40, 93, 85], ['DET', 44, 40, 85, 77], ['NYC', 44, 40, 77, 69],
+  ['SFO', 40, 36, 125, 118], ['LAS', 40, 35.75, 118, 111], ['DEN', 40, 35.75, 111, 104],
+  ['ICT', 40, 36, 104, 97], ['MKC', 40, 36, 97, 90], ['STL', 40, 36, 91, 84],
+  ['CVG', 40, 36, 85, 78], ['DCA', 40, 36, 79, 72], ['LAX', 36, 32, 121.5, 115],
+  ['PHX', 35.75, 31.25, 116, 109], ['ABQ', 36, 32, 109, 102], ['DFW', 36, 32, 102, 95],
+  ['MEM', 36, 32, 95, 88], ['ATL', 36, 32, 88, 81], ['CLT', 36, 32, 81, 75],
+  ['ELP', 32, 28, 109, 103], ['SAT', 32, 28, 103, 97], ['HOU', 32, 28, 97, 91],
+  ['MSY', 32, 28, 91, 85], ['JAX', 32, 28, 85, 79], ['BRO', 28, 24, 103, 97],
+  ['MIA', 28, 24, 83, 77]
+];
+
+// CAP grid for a position, e.g. "SEA 171 B": sectional, grid number, quarter
+// (A north-west, B north-east, C south-west, D south-east). Empty outside the
+// gridded charts. A point exactly on a grid line goes to the grid north or west of it.
+function capGridName(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return '';
+  const lonW = -lon;
+  let chart = null;
+  for (const c of CAP_SECTIONALS) {
+    if (lat <= c[1] && lat >= c[2] && lonW <= c[3] && lonW >= c[4] && (!chart || c[3] > chart[3])) chart = c;
+  }
+  if (!chart) return '';
+  const [id, north, , west, east] = chart;
+  // position in 7.5-minute steps from the chart's north-west corner
+  const eighth = value => Math.max(0, Math.ceil(Math.round(value * 8 * 1e6) / 1e6) - 1);
+  const down = eighth(north - lat);
+  const across = eighth(west - lonW);
+  const cols = Math.round((west - east) * 4);
+  const number = Math.floor(down / 2) * cols + Math.floor(across / 2) + 1;
+  const quarter = 'ABCD'[(down % 2) * 2 + (across % 2)];
+  return id + ' ' + number + ' ' + quarter;
+}
+
+/* CAP standardized latitude/longitude cell, e.g. "36102ADB" (MART Vol. I §8.8.1).
+   The digits name the one-degree block by its south-east corner (36N 102W covers
+   36–37N, 102–103W). Each letter then halves it again — 30, 15 and 7.5 minutes —
+   with A north-west, B north-east, C south-west, D south-east. North latitude and
+   west longitude only. */
+function capCellName(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < 0 || lon > 0) return '';
+  const lonW = -lon;
+  const blockLat = Math.floor(lat);
+  const blockLon = Math.floor(lonW);
+  const eighth = value => Math.min(7, Math.max(0, Math.ceil(Math.round(value * 8 * 1e6) / 1e6) - 1));
+  const down = eighth(blockLat + 1 - lat);        // 7.5-minute steps from the north edge
+  const across = eighth(blockLon + 1 - lonW);     // and from the west edge
+  let letters = '';
+  for (const shift of [2, 1, 0]) {
+    letters += 'ABCD'[((down >> shift) & 1) * 2 + ((across >> shift) & 1)];
+  }
+  return pad2(blockLat) + String(blockLon).padStart(3, '0') + letters;
+}
+
+function renderGpsChip() {
+  const chip = $('#gpsChip');
+  const label = $('#gpsLabel');
+  if (!chip || !label) return;
+  const fix = freshFix();
+  let level = 'off';
+  let text = 'GPS off';
+  if (gpsState === 'denied') { level = 'bad'; text = 'GPS denied'; }
+  else if (gpsState === 'unavailable') { level = 'off'; text = 'No GPS'; }
+  else if (gpsState === 'off') { level = 'off'; text = 'GPS off'; }
+  else if (fix) {
+    const metres = Math.round(fix.accuracy);
+    level = metres <= 50 ? 'ok' : 'warn';
+    text = 'GPS ±' + (metres >= 1000 ? (metres / 1000).toFixed(1) + ' km' : metres + ' m');
+  } else if (gpsState === 'on') { level = 'warn'; text = 'GPS lost'; }
+  else { level = 'warn'; text = 'GPS searching'; }
+  chip.dataset.level = level;
+  label.textContent = text;
+
+  // current position, and the CAP grid it falls in, while the fix is current
+  const pos = $('#gpsPos');
+  if (pos) {
+    pos.hidden = !fix;
+    pos.textContent = fix ? fmtCoord(fix.lat, true) + '  ' + fmtCoord(fix.lon, false) : '';
+  }
+  const grid = $('#gpsGrid');
+  if (grid) {
+    // sectional grid and lat/long cell, whichever apply here
+    const names = fix ? [capGridName(fix.lat, fix.lon), capCellName(fix.lat, fix.lon)].filter(Boolean) : [];
+    grid.hidden = !names.length;
+    grid.textContent = names.length ? '· ' + names.join(' · ') : '';
+  }
+}
+
 function gpsErrorText(error) {
   if (error && error.secure) {
     return 'GPS needs a secure page. Use the installed home-screen app or the https address.';
@@ -362,7 +524,7 @@ function gpsErrorText(error) {
   if (error && error.unsupported) return 'This browser does not support location.';
   const code = error && error.code;
   if (code === 1) {
-    return 'Location permission denied. Turn on Location Services for Safari or CAP Flight Log in iPad Settings.';
+    return 'Location permission denied. Turn on Location Services for Safari or Mission Log in iPad Settings.';
   }
   if (code === 3) return 'GPS timed out. Move into the open and try again.';
   if (code === 2) return 'Location unavailable. Check that Location Services is on, then try again.';
@@ -609,10 +771,10 @@ function newState() {
       fingerDraw: true,
       fingerDefaultSet: true,
       keepAwake: false,
-      gpsAuto: false,
+      gpsLive: true,
       opsInterval: 30,
-      introDismissed: false,
       hobbsPrompt: true,
+      installDismissed: false,
       termsAccepted: 0,
       termsAcceptedAt: 0
     },
@@ -679,6 +841,8 @@ function normalizeState(raw) {
   // the old Pencil default, indistinguishable from a choice, so switch it once.
   if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
   delete normalized.settings.coordFormat;   // the format choice was removed in 1.4.3
+  delete normalized.settings.introDismissed; // the intro card was removed in 1.7.3
+  delete normalized.settings.gpsAuto;        // replaced by live GPS in 1.8.0
   if (!normalized.logs.some(l => l.id === normalized.activeId)) {
     normalized.activeId = normalized.logs[0].id;
   }
@@ -906,7 +1070,6 @@ function lastHobbs(log) {
   }
   if (l.times.shutDown.hobbs) return l.times.shutDown.hobbs;
   if (l.times.engineStart.hobbs) return l.times.engineStart.hobbs;
-  if (l.times.tachEnd) return l.times.tachEnd;
   return '';
 }
 
@@ -923,13 +1086,18 @@ function timeTotals(log) {
   const l = log || activeLog();
   const engine = diffMin(l.times.engineStart.time, l.times.shutDown.time);
   const flight = diffMin(l.times.wheelsUp.time, l.times.wheelsDown.time);
-  const tachA = num(l.times.tachStart);
-  const tachB = num(l.times.tachEnd);
+  const tachA = num(tachValues(l).start);
+  const tachB = num(tachValues(l).end);
   const tach = tachA != null && tachB != null ? tachB - tachA : null;
   const hobbsA = num(l.times.engineStart.hobbs);
   const hobbsB = num(l.times.shutDown.hobbs);
   const hobbs = hobbsA != null && hobbsB != null ? hobbsB - hobbsA : null;
-  return { engine, flight, tach, hobbs };
+  // WMIRS wants the Hobbs total split in two parts that add back up to it.
+  const areaIn = num(l.times.inArea.hobbs);
+  const areaOut = num(l.times.outOfArea.hobbs);
+  const hobbsArea = areaIn != null && areaOut != null ? areaOut - areaIn : null;
+  const hobbsToFrom = hobbs != null && hobbsArea != null ? hobbs - hobbsArea : null;
+  return { engine, flight, tach, hobbs, hobbsArea, hobbsToFrom };
 }
 
 function nextOpsDue(log) {
@@ -1029,25 +1197,6 @@ function render() {
   }
 }
 
-function introHTML() {
-  return `
-    <div class="intro">
-      <div class="intro-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v18M5 8.5 12 3l7 5.5"/><path d="M7.5 21h9"/>
-        </svg>
-      </div>
-      <div>
-        <h3>Ready for the sortie</h3>
-        <p>Start with the mission details, then tap a checkpoint as each one happens. Everything autosaves on this iPad and works with no signal.</p>
-        <div class="btn-row">
-          <button class="btn small primary" data-act="edit-mission">Mission details</button>
-          <button class="btn small" data-act="dismiss-intro">Got it</button>
-        </div>
-      </div>
-    </div>`;
-}
-
 function opsBanner(log) {
   const last = log.ops[log.ops.length - 1];
   if (!last) {
@@ -1077,12 +1226,13 @@ function opsBanner(log) {
 }
 
 function quickButton(log, item) {
-  const entry = item.kind ? entryForKind(log, item.kind) : null;
+  const entry = entryForKind(log, item.kind);
   const done = !!(entry && entry.time);
-  const cls = 'quick' + (done ? ' done' : '') + (item.kind ? '' : ' custom');
+  const cls = 'quick' + (done ? ' done' : '');
   return `<button type="button" class="${cls}" data-act="quick" data-kind="${esc(item.kind)}" data-label="${esc(item.label)}">
+    <svg class="quick-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${item.icon}</svg>
     <span class="quick-label">${esc(item.label)}</span>
-    <span class="quick-time mono">${done ? fmtZ(entry.time) : (item.kind ? 'Tap to log' : 'New entry')}</span>
+    <span class="quick-time mono">${done ? fmtZ(entry.time) : ''}</span>
   </button>`;
 }
 
@@ -1114,31 +1264,88 @@ function entriesHTML(log) {
   return '<div class="entry-list">' + rows + '</div>';
 }
 
+/* Tach start and end follow the readings taken at Engine Start and Shut Down
+   until one is typed in on the Sign tab; clearing the field goes back to following. */
+function tachValues(log) {
+  const l = log || activeLog();
+  return { start: l.times.tachStart || '', end: l.times.tachEnd || '' };
+}
+
+/* Hobbs and tach as the aircraft flight time log and the WMIRS debrief want them:
+   end above start, with the totals, and Hobbs split into In Area and To/From. */
 function tachCardHTML(log) {
   const totals = timeTotals(log);
+  const tach = tachValues(log);
+  const one = value => value == null ? '—' : fmtDecimal(value, 1);
+  const shown = value => value ? esc(value) : '—';
   return `<section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>Tach &amp; totals</h2></div>
+        <div class="head-left"><h2>Hobbs &amp; tach</h2></div>
+        <span class="muted small">Check before signing</span>
       </div>
-      <div class="form-grid">
-        <label class="field"><span>Tach start</span>
-          <input class="input mono" data-bind="times.tachStart" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachStart)}" placeholder="e.g. 5123.4">
-        </label>
-        <label class="field"><span>Tach end</span>
-          <input class="input mono" data-bind="times.tachEnd" data-norm="hobbs" inputmode="decimal" value="${esc(log.times.tachEnd)}" placeholder="e.g. 5124.7">
-        </label>
+      <div class="meter-grid">
+        <div></div><div class="meter-head">Hobbs</div><div class="meter-head">Tach</div>
+        <div class="meter-label">End<small>Shut Down</small></div>
+        <div class="meter-value mono" id="meter-hobbs-end">${shown(log.times.shutDown.hobbs)}</div>
+        <input class="input mono" data-bind="times.tachEnd" data-norm="hobbs" inputmode="decimal" value="${esc(tach.end)}" placeholder="e.g. 5124.7" aria-label="Tach end">
+        <div class="meter-label">Start<small>Engine Start</small></div>
+        <div class="meter-value mono" id="meter-hobbs-start">${shown(log.times.engineStart.hobbs)}</div>
+        <input class="input mono" data-bind="times.tachStart" data-norm="hobbs" inputmode="decimal" value="${esc(tach.start)}" placeholder="e.g. 5123.4" aria-label="Tach start">
+        <div class="meter-label">Total</div>
+        <div class="meter-value mono strong" id="meter-hobbs-total">${one(totals.hobbs)}</div>
+        <div class="meter-value mono strong" id="tach-card-total">${one(totals.tach)}</div>
       </div>
       <div class="totals" style="grid-template-columns:1fr 1fr">
-        <div class="total"><div class="tl">Total tach</div><div class="tv" id="tach-card-total">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
-        <div class="total"><div class="tl">Shut-down Hobbs</div><div class="tv" id="tach-card-hobbs">${log.times.shutDown.hobbs ? esc(log.times.shutDown.hobbs) : '—'}</div></div>
+        <div class="total"><div class="tl">Hobbs in area</div><div class="tv" id="meter-hobbs-area">${one(totals.hobbsArea)}</div></div>
+        <div class="total"><div class="tl">Hobbs to / from</div><div class="tv" id="meter-hobbs-tofrom">${one(totals.hobbsToFrom)}</div></div>
       </div>
+      <div class="sketch-hint">Hobbs comes from the checkpoints; correct it on the Times tab. In area is Out of Area minus In Area, and to / from is the rest, so the two add up to the total. On G1000 aircraft the tach reading is ENG HOURS.</div>
     </section>`;
 }
 
+/* ---------- install prompt ---------- */
+
+// Chrome, Edge and Android hand over an install prompt; Safari has none, so
+// there the banner spells out Share → Add to Home Screen.
+let installPromptEvent = null;
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  installPromptEvent = event;
+  if (state && activeTab === 'log') renderWhenIdle();
+});
+window.addEventListener('appinstalled', () => {
+  installPromptEvent = null;
+  if (state && activeTab === 'log') renderWhenIdle();
+});
+
+const SHARE_ICON = '<svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Share"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+
+function installBannerHTML() {
+  if (isStandaloneApp() || state.settings.installDismissed) return '';
+  const ios = isIOSDevice();
+  if (!ios && !installPromptEvent) return '';   // nothing useful to offer here
+  const how = ios
+    ? `In Safari, tap ${SHARE_ICON} <strong>Share</strong>, then <strong>Add to Home Screen</strong>.`
+    : 'Install it to open from its own icon, full screen.';
+  return `<div class="install-banner">
+      <img src="icons/icon-192.png" alt="" width="52" height="52">
+      <div class="install-text">
+        <h3>Install Mission Log on this ${ios ? 'iPad' : 'device'}</h3>
+        <p>${how} It gets its own app icon, opens full screen and works with no signal.</p>
+        <p class="install-warn">Install before you start a log: logs made here in the browser do not move to the installed app.</p>
+        <div class="btn-row">
+          ${ios ? '<button class="btn small primary" data-act="help">Show me how</button>'
+                : '<button class="btn small primary" data-act="install-app">Install</button>'}
+          <button class="btn small" data-act="dismiss-install">Not now</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function logView(log) {
-  const showIntro = !state.settings.introDismissed && !log.mission && !log.entries.length;
   return `<div class="stack">
-    ${showIntro ? introHTML() : ''}
+    ${installBannerHTML()}
     ${opsBanner(log)}
     <section class="card">
       <div class="card-head">
@@ -1146,13 +1353,9 @@ function logView(log) {
         <span class="muted small">Tap to stamp UTC</span>
       </div>
       <div class="quick-grid">${QUICK.map(q => quickButton(log, q)).join('')}</div>
-      <button type="button" class="btn soft wide gps-mark" data-act="mark-position">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-        Mark current position
-      </button>
-      <div class="gps-hint">${state.settings.gpsAuto ? 'Auto GPS is on — checkpoints and observations capture a position.' : 'Uses the iPad’s GPS to fill latitude and longitude. Tap a checkpoint to log it, or mark a position here.'}</div>
+      <button type="button" class="btn soft wide gps-mark" data-act="add-checkpoint">+ Checkpoint</button>
+      <div class="gps-hint">Tap a checkpoint to stamp the time and position. + Checkpoint adds one of your own.</div>
     </section>
-    ${tachCardHTML(log)}
     <section class="card">
       <div class="card-head">
         <div class="head-left">
@@ -1534,7 +1737,7 @@ function fplImportSheet() {
 }
 
 function signView(log) {
-  return `<div class="stack"><section class="card">
+  return `<div class="stack">${tachCardHTML(log)}<section class="card">
     <div class="card-head">
       <div class="head-left"><h2>Sign-off</h2></div>
       <button class="btn small" data-act="sign-now">Now (UTC)</button>
@@ -1623,7 +1826,7 @@ function updateOutputs() {
   set('#tot-tach', totals.tach == null ? '—' : fmtDecimal(totals.tach, 1));
   set('#tot-hobbs', totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1));
   set('#tach-card-total', totals.tach == null ? '—' : fmtDecimal(totals.tach, 1));
-  set('#tach-card-hobbs', log.times.shutDown.hobbs || '—');
+  set('#meter-hobbs-total', totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1));
 
   $$('[data-coord]').forEach(input => updateCoordHelp(input));
   updateToolbarState();
@@ -2005,7 +2208,7 @@ function termsNeeded() {
 function termsHTML() {
   return `<div class="terms">
     <h3>Disclaimer</h3>
-    <p><strong>Not an official Civil Air Patrol product.</strong> CAP Flight Log is a personal tool made by a
+    <p><strong>Not an official Civil Air Patrol product.</strong> Mission Log is a personal tool made by a
       CAP member. It is not affiliated with, endorsed by, or supported by Civil Air Patrol, Inc. or the
       United States Air Force.</p>
     <p><strong>Not for navigation.</strong> This app is not a certified electronic flight bag and must not
@@ -2085,7 +2288,7 @@ function coordField(label, path, value, isLat) {
   return `<label class="field"><span>${esc(label)}</span>
     <input class="input mono" data-bind="${esc(path)}" data-coord="${isLat ? 'lat' : 'lon'}"
       data-norm="coord" inputmode="decimal" value="${esc(value)}"
-      placeholder="${isLat ? 'N 35 30.00' : 'W 080 15.00'}">
+      placeholder="${isLat ? 'N 35 30.00' : 'W 80 15.00'}">
     <div class="coord-help"></div>
   </label>`;
 }
@@ -2094,7 +2297,7 @@ function sheetCoordField(label, id, value, isLat) {
   return `<label class="field"><span>${esc(label)}</span>
     <input class="input mono" id="${esc(id)}" data-coord="${isLat ? 'lat' : 'lon'}"
       inputmode="decimal" value="${esc(value)}"
-      placeholder="${isLat ? 'N 35 30.00' : 'W 080 15.00'}">
+      placeholder="${isLat ? 'N 35 30.00' : 'W 80 15.00'}">
     <div class="coord-help"></div>
   </label>`;
 }
@@ -2393,38 +2596,78 @@ function keypadPress(target, key) {
 }
 
 // Asked straight after a checkpoint is stamped, so Hobbs goes in with big keys.
+// Which tach reading a checkpoint carries, if any.
+const KIND_TO_TACHKEY = { 'engine-start': 'tachStart', 'shut-down': 'tachEnd' };
+
 function hobbsSheet(entryId) {
-  const entry = activeLog().entries.find(e => e.id === entryId);
+  const log = activeLog();
+  const entry = log.entries.find(e => e.id === entryId);
   if (!entry) return;
+  const tachKey = KIND_TO_TACHKEY[entry.kind];
+  // Shut Down starts from the Engine Start tach, ready to be adjusted upwards.
+  const tachValue = tachKey ? (log.times[tachKey] || (tachKey === 'tachEnd' ? log.times.tachStart : '') || '') : '';
+  const meter = (id, label, value, active) => `<label class="meter-entry">
+      <span>${label}</span>
+      <input class="input hobbs-big mono ${active ? 'kp-active' : ''}" id="${id}" inputmode="none" autocomplete="off"
+        value="${esc(value)}" placeholder="0.0">
+    </label>`;
   openSheet({
-    title: 'Hobbs',
+    title: tachKey ? 'Hobbs &amp; tach' : 'Hobbs',
     sub: entry.event + ' · ' + fmtZ(entry.time),
     body: `
-      <input class="input hobbs-big mono" id="k-hobbs" inputmode="none" autocomplete="off"
-        aria-label="Hobbs" value="${esc(entry.hobbs)}" placeholder="0.0">
-      ${keypadHTML('#k-hobbs')}
-      <div class="sheet-note" style="text-align:center">Type the reading, or adjust the last one with ±0.1.</div>
+      <div class="meter-entries ${tachKey ? 'two' : ''}">
+        ${meter('k-hobbs', 'Hobbs', entry.hobbs, true)}
+        ${tachKey ? meter('k-tach', 'Tach', tachValue, false) : ''}
+      </div>
+      ${keypadHTML('#overlay .kp-active')}
+      <div class="sheet-note" style="text-align:center">${tachKey
+        ? 'Type Hobbs, then Next for tach. On G1000 aircraft tach is ENG HOURS (ENGINE, then SYSTEM).'
+        : 'Type the reading, or adjust the last one with ±0.1.'}</div>
     `,
     footer: `<button type="button" class="btn" data-close>Skip</button>
-      <button type="button" class="btn primary" data-act="save-hobbs" data-id="${esc(entry.id)}">Save</button>`,
+      <button type="button" class="btn primary" id="k-next" data-act="${tachKey ? 'hobbs-next' : 'save-hobbs'}" data-id="${esc(entry.id)}">${tachKey ? 'Next: tach' : 'Save'}</button>`,
     onClose: () => render()
   });
-  setKeypadFresh($('#k-hobbs'), true);
+  $$('#overlay .hobbs-big').forEach(input => {
+    setKeypadFresh(input, true);
+    input.addEventListener('focus', () => setMeterActive(input));
+    input.addEventListener('keydown', () => setKeypadFresh(input, false));   // hardware keyboard
+  });
+}
+
+// Point the keypad at one of the two readings; the footer button follows.
+function setMeterActive(input) {
+  $$('#overlay .hobbs-big').forEach(el => el.classList.toggle('kp-active', el === input));
+  const next = $('#k-next');
+  if (!next || !$('#k-tach')) return;
+  const onTach = input.id === 'k-tach';
+  next.dataset.act = onTach ? 'save-hobbs' : 'hobbs-next';
+  next.textContent = onTach ? 'Save' : 'Next: tach';
 }
 
 function saveHobbsFromSheet(entryId) {
   const log = activeLog();
-  const input = $('#k-hobbs');
-  const value = input ? input.value.trim().replace(/\.$/, '') : '';
-  if (value && num(value) == null) {
-    toast('Enter a valid Hobbs reading');
-    return;
-  }
+  const read = (selector, name) => {
+    const input = $(selector);
+    if (!input) return null;
+    const value = input.value.trim().replace(/\.$/, '');
+    if (value && num(value) == null) {
+      toast('Enter a valid ' + name + ' reading');
+      return undefined;
+    }
+    return value;
+  };
+  const hobbs = read('#k-hobbs', 'Hobbs');
+  const tach = read('#k-tach', 'tach');
+  if (hobbs === undefined || tach === undefined) return;
+
   const entry = log.entries.find(e => e.id === entryId);
   if (entry) {
-    entry.hobbs = value;
+    entry.hobbs = hobbs || '';
     const timeKey = KIND_TO_TIMEKEY[entry.kind];
-    if (timeKey && log.times[timeKey]) log.times[timeKey].hobbs = value;
+    if (timeKey && log.times[timeKey]) log.times[timeKey].hobbs = entry.hobbs;
+    const tachKey = KIND_TO_TACHKEY[entry.kind];
+    if (tachKey && tach != null) log.times[tachKey] = tach;
     save();
   }
   closeSheet();
@@ -2433,14 +2676,19 @@ function saveHobbsFromSheet(entryId) {
 function openEntrySheet(entryId, preset) {
   const log = activeLog();
   const existing = entryId ? log.entries.find(e => e.id === entryId) : null;
+  // A new entry starts at the current position; with no fix, at the last one logged.
+  const fixAtOpen = existing ? null : freshFix();
+  const startPosition = fixAtOpen
+    ? { lat: fmtCoord(fixAtOpen.lat, true), lon: fmtCoord(fixAtOpen.lon, false) }
+    : lastPosition(log);
   const entry = existing || Object.assign({
     id: '',
     kind: '',
     event: '',
     time: nowZ(),
     hobbs: lastHobbs(log),
-    lat: lastPosition(log).lat,
-    lon: lastPosition(log).lon,
+    lat: startPosition.lat,
+    lon: startPosition.lon,
     note: ''
   }, preset || {});
 
@@ -2488,13 +2736,30 @@ function openEntrySheet(entryId, preset) {
       <label class="field" style="margin-top:12px"><span>Remarks</span>
         <textarea class="input" id="f-note" placeholder="Optional detail">${esc(entry.note)}</textarea>
       </label>
-      <div class="sheet-note">Coordinate fields are prefilled from your last position; overwrite them when it changes.</div>
+      <div class="sheet-note">Position is filled from GPS when there is a fix, otherwise from your last entry. Overwrite it if it is wrong.</div>
     `,
     footer: `${existing ? '<button type="button" class="btn danger left" data-act="delete-entry-sheet" data-id="' + esc(entry.id) + '">Delete</button>' : ''}
       <button type="button" class="btn" data-close>Cancel</button>
       <button type="button" class="btn primary" data-act="save-entry" data-id="${esc(entry.id)}">Save</button>`,
     onClose: null
   });
+
+  if (!existing) {
+    const status = $('#gps-sheet-status');
+    const latInput = $('#f-lat');
+    const lonInput = $('#f-lon');
+    if (fixAtOpen) {
+      if (status) status.textContent = gpsStatusText(fixAtOpen);
+    } else if (state.settings.gpsLive && latInput && lonInput) {
+      // No fix yet: fill the position when one arrives, unless it was typed over meanwhile.
+      const before = latInput.value + '|' + lonInput.value;
+      requestGps(false).then(fix => {
+        if (!latInput.isConnected || latInput.value + '|' + lonInput.value !== before) return;
+        fillCoordPair(latInput, lonInput, fix);
+        if (status) status.textContent = gpsStatusText(fix);
+      }).catch(() => { /* the header chip already shows the GPS state */ });
+    }
+  }
 
   const hobbsInput = $('#f-hobbs');
   if (hobbsInput) {
@@ -2650,7 +2915,7 @@ function menuSheet() {
         </div>
       </div>
 
-      <div class="sheet-note">CAP Flight Log v${APP_VERSION} · ${state.logs.reduce((n, l) => n + l.entries.length, 0)} entries across ${state.logs.length} log${state.logs.length === 1 ? '' : 's'}. Data never leaves this iPad unless you export it.</div>
+      <div class="sheet-note">Mission Log v${APP_VERSION} · ${state.logs.reduce((n, l) => n + l.entries.length, 0)} entries across ${state.logs.length} log${state.logs.length === 1 ? '' : 's'}. Data never leaves this iPad unless you export it.</div>
     `,
     footer: `<button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
@@ -2690,9 +2955,9 @@ function settingsSheet() {
       </div>
 
       <div class="setting-row">
-        <div class="setting-label">Auto-capture GPS<small>${gpsSupported ? 'Adds a position to checkpoints and observations' : 'Needs the installed app or an https page'}</small></div>
-        <button type="button" class="toggle ${settings.gpsAuto ? 'on' : ''}" data-act="toggle-gps-auto" ${gpsSupported ? '' : 'disabled'}>
-          <span class="tick">✓</span> ${settings.gpsAuto ? 'On' : 'Off'}
+        <div class="setting-label">Live GPS<small>${gpsSupported ? 'Shows GPS status in the header and starts entries at the current position' : 'Needs the installed app or an https page'}</small></div>
+        <button type="button" class="toggle ${settings.gpsLive ? 'on' : ''}" data-act="toggle-gps-live" ${gpsSupported ? '' : 'disabled'}>
+          <span class="tick">✓</span> ${settings.gpsLive ? 'On' : 'Off'}
         </button>
       </div>
 
@@ -2742,7 +3007,7 @@ function helpSheet() {
         <h3>In the air</h3>
         <div class="menu-list">
           <div class="menu-item" style="cursor:default">
-            <span><strong>Checkpoint buttons</strong><span class="mi-sub">Tap Engine Start, Wheels Up, In Area, etc. The time is stamped and a keypad asks for Hobbs, starting from the last reading. Tap the checkpoint again to edit it.</span></span>
+            <span><strong>Checkpoint buttons</strong><span class="mi-sub">Tap Engine Start, Wheels Up, In Area, etc. The time is stamped and a keypad asks for Hobbs, starting from the last reading. Engine Start and Shut Down also ask for tach. Tap the checkpoint again to edit it.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>OPS rhythm</strong><span class="mi-sub">Record a check every 30 minutes. Fuel and altimeter carry forward; the log tab warns you when one is due.</span></span>
@@ -2751,7 +3016,7 @@ function helpSheet() {
             <span><strong>Positions</strong><span class="mi-sub">Stored as degrees and decimal minutes (N 35° 30.00′). Type them that way, as decimal degrees (35.5) or as degrees, minutes and seconds (35 30 00); the line under each field shows the other formats. New entries start at your last position.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>GPS positions</strong><span class="mi-sub">Tap “Use GPS” in an entry, observation, or mission sheet. Turn on Auto-capture GPS in Settings to stamp every checkpoint. Allow location when Safari asks; a fix works without a network.</span></span>
+            <span><strong>GPS positions</strong><span class="mi-sub">The header shows the GPS status and accuracy. Checkpoints, new entries and observations start at the current position; with no fix they start at the last one logged. Allow location when asked; a fix works without a network. Switch Live GPS off in Settings to save battery.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>Observation photos</strong><span class="mi-sub">Tap Photo on an observation to use the camera or photo library. Up to six per observation; photos appear in the PDF.</span></span>
@@ -2785,7 +3050,7 @@ function helpSheet() {
         </p>
       </div>
 
-      <div class="sheet-note" style="text-align:center;margin-top:20px">CAP Flight Log v${APP_VERSION}</div>
+      <div class="sheet-note" style="text-align:center;margin-top:20px">Mission Log v${APP_VERSION}</div>
     `,
     footer: `<button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
@@ -2805,7 +3070,8 @@ function quickLog(kind, label) {
   }
 
   const beforeTimes = deepClone(log.times);
-  const position = lastPosition(log);
+  const fix = freshFix();
+  const position = fix ? { lat: fmtCoord(fix.lat, true), lon: fmtCoord(fix.lon, false) } : lastPosition(log);
   const entry = {
     id: uid(),
     kind,
@@ -2817,6 +3083,10 @@ function quickLog(kind, label) {
     note: '',
     createdAt: Date.now()
   };
+  if (fix) {
+    entry.gpsAccuracy = Math.round(fix.accuracy);
+    entry.gpsTime = fmtZ(hhmmFromMs(fix.at));
+  }
   log.entries.push(entry);
 
   const timeKey = KIND_TO_TIMEKEY[kind];
@@ -2824,7 +3094,7 @@ function quickLog(kind, label) {
 
   save();
   render();
-  if (state.settings.gpsAuto) autoGpsEntry(entry);
+  if (!fix && state.settings.gpsLive) autoGpsEntry(entry);
   if (state.settings.hobbsPrompt) hobbsSheet(entry.id);
   toast(label + ' logged at ' + fmtZ(entry.time), 'Undo', () => {
     log.entries = log.entries.filter(e => e.id !== entry.id);
@@ -2851,7 +3121,7 @@ function addObservation() {
     activeTab = 'obs';
   }
   render();
-  if (state.settings.gpsAuto) autoGpsObservation(obs);
+  if (state.settings.gpsLive) autoGpsObservation(obs);
   requestAnimationFrame(() => {
     const cards = $$('.obs');
     const last = cards[cards.length - 1];
@@ -2948,7 +3218,7 @@ function exportName(extension) {
   const log = activeLog();
   const d = new Date();
   const date = d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate());
-  return 'cap-flight-log_' + slug(log.mission) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
+  return 'mission-log_' + slug(log.mission) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
 }
 
 async function shareFile(filename, blob) {
@@ -2978,7 +3248,7 @@ async function shareFile(filename, blob) {
 
 function exportJSON() {
   const payload = {
-    app: 'CAP Flight Log',
+    app: 'Mission Log',
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
@@ -3302,7 +3572,7 @@ function buildPdfBlob() {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.8);
   doc.setTextColor(grey[0], grey[1], grey[2]);
-  doc.text('Tach start ' + (log.times.tachStart || '________') + '  ·  Tach end ' + (log.times.tachEnd || '________'),
+  doc.text('Tach start ' + (tachValues(log).start || '________') + '  ·  Tach end ' + (tachValues(log).end || '________'),
     totalsX, tableTop + totalsH * 2 + 10);
 
   y = Math.max(tableTop + rowH * 7, tableTop + totalsH * 2 + 16) + 10;
@@ -3811,7 +4081,7 @@ function buildPrint() {
             <div class="p-total"><div class="tl">Total tach</div><div class="tv">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
             <div class="p-total"><div class="tl">Hobbs used</div><div class="tv">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
           </div>
-          <div class="p-note">Tach start ${esc(log.times.tachStart || '________')} · Tach end ${esc(log.times.tachEnd || '________')}</div>
+          <div class="p-note">Tach start ${esc(tachValues(log).start || '________')} · Tach end ${esc(tachValues(log).end || '________')}</div>
         </div>
       </div>
 
@@ -3957,20 +4227,24 @@ const actions = {
     const tab = el.dataset.tab;
     if (tab) switchTab(tab);
   },
-  'dismiss-intro': () => {
-    state.settings.introDismissed = true;
-    save();
+  'install-app': async () => {
+    if (!installPromptEvent) return;
+    const prompt = installPromptEvent;
+    installPromptEvent = null;
+    prompt.prompt();
+    try { await prompt.userChoice; } catch (_) { /* dismissed */ }
     render();
   },
-  'edit-mission': () => missionSheet(),
-  'quick': el => {
-    if (!el.dataset.kind) {
-      openEntrySheet(null);
-      return;
-    }
-    quickLog(el.dataset.kind, el.dataset.label || 'Log entry');
+  'dismiss-install': () => {
+    state.settings.installDismissed = true;
+    save();
+    render();
+    toast('Find the steps later under Menu → Help & install');
   },
+  'edit-mission': () => missionSheet(),
+  'quick': el => quickLog(el.dataset.kind, el.dataset.label || 'Log entry'),
   'add-entry': () => openEntrySheet(null),
+  'add-checkpoint': () => openEntrySheet(null),
   'edit-entry': el => openEntrySheet(el.dataset.id),
   'del-entry': el => deleteEntry(el.dataset.id),
   'save-entry': el => saveEntryFromSheet(el.dataset.id || null),
@@ -4002,6 +4276,10 @@ const actions = {
     if (panel.hidden) target.focus(); else target.blur();
   },
   'save-hobbs': el => saveHobbsFromSheet(el.dataset.id),
+  'hobbs-next': () => {
+    const tach = $('#k-tach');
+    if (tach) setMeterActive(tach);
+  },
   'toggle-hobbs-prompt': () => {
     state.settings.hobbsPrompt = !state.settings.hobbsPrompt;
     save();
@@ -4069,53 +4347,23 @@ const actions = {
       done();
     }
   },
-  'mark-position': async el => {
-    const done = gpsBusy(el);
-    try {
-      const fix = await requestGps(true);
-      const log = activeLog();
-      const entry = {
-        id: uid(),
-        kind: '',
-        event: 'Position',
-        time: nowZ(),
-        hobbs: lastHobbs(log),
-        lat: fmtCoord(fix.lat, true),
-        lon: fmtCoord(fix.lon, false),
-        note: '',
-        createdAt: Date.now(),
-        gpsAccuracy: Math.round(fix.accuracy),
-        gpsTime: fmtZ(hhmmFromMs(fix.at))
-      };
-      log.entries.push(entry);
-      save();
-      renderWhenIdle();
-      toast('Position marked · ±' + Math.round(fix.accuracy) + ' m', 'Details', () => openEntrySheet(entry.id));
-    } catch (err) {
-      toast(gpsErrorText(err));
-      openEntrySheet(null, { event: 'Position' });
-    } finally {
-      done();
-    }
+  'toggle-gps-live': () => {
+    state.settings.gpsLive = !state.settings.gpsLive;
+    save();
+    if (state.settings.gpsLive) startGpsWatch(); else stopGpsWatch();
+    settingsSheet();
   },
-  'toggle-gps-auto': async el => {
-    if (state.settings.gpsAuto) {
-      state.settings.gpsAuto = false;
+  'gps-chip': () => {
+    if (!state.settings.gpsLive) {
+      state.settings.gpsLive = true;
       save();
-      settingsSheet();
-      return;
     }
-    const done = gpsBusy(el);
-    try {
-      const fix = await requestGps(true);
-      state.settings.gpsAuto = true;
-      save();
-      settingsSheet();
-      toast('Auto GPS is on · ±' + Math.round(fix.accuracy) + ' m');
-    } catch (err) {
-      toast(gpsErrorText(err));
-      done();
-    }
+    if (gpsState === 'denied') { toast(gpsErrorText({ code: 1 })); return; }
+    if (gpsState === 'unavailable') { toast(gpsErrorText(window.isSecureContext ? { unsupported: true } : { secure: true })); return; }
+    if (gpsWatchId == null) { startGpsWatch(); toast('Looking for a GPS fix…'); return; }
+    const fix = freshFix();
+    toast(fix ? coordPair(fmtCoord(fix.lat, true), fmtCoord(fix.lon, false)) + ' · ±' + Math.round(fix.accuracy) + ' m'
+              : 'No GPS fix yet. Move where the iPad can see the sky.');
   },
   'add-obs': () => addObservation(),
   'del-obs': el => {
@@ -4677,6 +4925,7 @@ async function boot() {
       return;
     }
     if (state.settings.keepAwake && !wakeLock) syncWakeLock();
+    if (state.settings.gpsLive && gpsWatchId == null && gpsState !== 'denied') startGpsWatch();
     if (updateReady) applyUpdate();
     else checkForUpdate();
   });
@@ -4688,6 +4937,9 @@ async function boot() {
 
   preloadPdfLogo();
   syncWakeLock();
+
+  if (state.settings.gpsLive) startGpsWatch(); else renderGpsChip();
+  setInterval(renderGpsChip, 5000);   // a fix that stops arriving turns to GPS lost
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     // A controller at load means this is an update, not the first install.
