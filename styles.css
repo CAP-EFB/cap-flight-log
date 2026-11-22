@@ -202,8 +202,11 @@ h1, h2, h3, p { margin: 0; }
   appearance: none;
 }
 .gps-chip:active { background: var(--chrome-press); }
-.gps-pos { font-size: 13px; font-weight: 600; letter-spacing: .01em; flex: none; }
-.gps-grid { font-size: 12px; font-weight: 600; color: var(--chrome-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* position, with the CAP grid and cell on the line below */
+.gps-where { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; line-height: 1.2; }
+.gps-where:not(:has(:not([hidden]))) { display: none; }
+.gps-pos { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+.gps-grid { font-size: 11.5px; font-weight: 600; color: var(--chrome-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .gps-pos[hidden], .gps-grid[hidden], .gps-sep[hidden] { display: none; }
 .gps-sep { flex: none; width: 1px; height: 18px; background: rgba(255, 255, 255, .28); }
 .gps-meta { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: var(--chrome-muted); }
