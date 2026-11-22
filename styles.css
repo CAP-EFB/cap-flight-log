@@ -158,7 +158,7 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .topbar-row {
-  max-width: 1020px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 4px 16px 8px;
   display: flex;
@@ -167,7 +167,7 @@ h1, h2, h3, p { margin: 0; }
   gap: 12px;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
 
 .brand-icon {
   width: 34px; height: 34px;
@@ -214,6 +214,8 @@ h1, h2, h3, p { margin: 0; }
 .gps-chip[data-level="warn"] .gps-icon { color: var(--amber); }
 .gps-chip[data-level="bad"] .gps-icon { color: var(--red); }
 @media (max-width: 700px) { .gps-pos { display: none; } }
+/* Slide Over and narrow Split View: just the satellite icon, coloured by fix quality */
+@media (max-width: 440px) { #gpsLabel, .gps-grid { display: none; } }
 
 /* the header logo: airplane and wordmark in one image */
 .brand-logo { display: block; width: auto; height: 46px; }
@@ -278,9 +280,8 @@ h1, h2, h3, p { margin: 0; }
   gap: 6px;
 }
 .mission-strip {
-  flex: none;
-  max-width: 45%;
-  min-width: 0;
+  /* shrinks no further than "Start Here" plus a little of the name */
+  flex: 0 1 auto;
   min-height: 42px;
   display: flex;
   align-items: center;
@@ -372,12 +373,19 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* Narrow screens: the mission line drops under the app name. */
-@media (max-width: 700px) {
-  .topbar-row { flex-wrap: wrap; row-gap: 2px; }
+/* Below a wide landscape iPad the bar takes two rows: logo, GPS and buttons on
+   top; mission, sortie and crew underneath with the full width to themselves. */
+@media (max-width: 1199px) {
+  .topbar-row { flex-wrap: wrap; row-gap: 0; padding-bottom: 4px; }
   .brand { flex: 1; }
   .brand-pipe { display: none; }
-  .mission-bar { order: 3; flex-basis: 100%; }
-  .mission-strip { padding-left: 0; }
+  .mission-bar {
+    order: 3;
+    flex-basis: 100%;
+    margin: 0 -6px;
+    padding-top: 2px;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+  }
 }
 
 /* ---------- layout ---------- */
@@ -815,7 +823,7 @@ select.input {
 .crew-list { display: flex; flex-direction: column; gap: 8px; }
 .crew-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) 2fr 120px 30px;
+  grid-template-columns: 84px 2fr 120px 30px;
   gap: 7px;
   align-items: center;
 }
@@ -1068,6 +1076,8 @@ body.finger-draw #sketch { touch-action: none; }
 .tab.active { color: var(--blue); }
 .tab:active { background: var(--card-2); }
 
+body.keyboard-open .tabbar { display: none; }
+
 /* ---------- sheets ---------- */
 
 .overlay {
@@ -1194,6 +1204,41 @@ a.menu-item { text-decoration: none; }
 }
 .mission-group.active .mission-group-name { color: var(--blue); }
 .sortie-row { padding-left: 16px; }
+.sortie-signed {
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: var(--green-soft); color: var(--green); font-size: 11px; font-weight: 700;
+}
+/* the two steps of a new mission */
+.steps { display: flex; gap: 10px; flex-wrap: wrap; }
+.step {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px 7px 7px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  font-size: 13.5px; font-weight: 650;
+}
+.step-num {
+  width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--card-2); color: var(--muted); font-size: 12px; font-weight: 800;
+}
+.step.done { color: var(--green); }
+.step.done .step-num { background: var(--green-soft); color: var(--green); }
+.step.now { color: var(--text); border-color: var(--blue); }
+.step.now .step-num { background: var(--blue-btn); color: #fff; }
+.sortie-switch[hidden] { display: none; }
+.card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
+/* sortie tabs stay shut until the mission has a sortie */
+.tabbar.locked .tab { opacity: .38; }
+
+.back-link {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 650;
+  padding: 4px 2px;
+  cursor: pointer;
+}
 .log-name { font-size: 14.5px; font-weight: 650; }
 .log-meta { font-size: 11.5px; color: var(--muted); }
 
