@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.17.2';
+const APP_VERSION = '1.17.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -842,6 +842,14 @@ function chartFullZoom() {
   return (window.devicePixelRatio || 1) > 1.4 ? 11 : 12;
 }
 
+function closePositionView() {
+  if (positionMap) positionMap.remove();
+  positionMap = null;
+  const view = $('#pos-full');
+  if (view) view.remove();
+  document.documentElement.classList.remove('pos-open');
+}
+
 function positionFixHTML(fix) {
   if (!fix) {
     return `<div class="pos-none">No current GPS fix.${lastGpsFix ? ' Showing the last one, from ' + esc(fmtZ(hhmmFromMs(lastGpsFix.at))) + '.' : ''}</div>`;
@@ -863,19 +871,26 @@ function positionFixHTML(fix) {
 
 function positionSheet() {
   const fix = freshFix() || lastGpsFix;
-  openSheet({
-    title: 'Position',
-    sub: 'Live GPS on the FAA sectional · for reference, not navigation',
-    body: `<div id="pos-text">${positionFixHTML(freshFix())}</div>
-      <div class="pos-map" id="pos-map"></div>
-      <div class="sheet-note">Chart: FAA Aeronautical Information Services. It needs a connection the first time an area is viewed.</div>`,
-    footer: `<button type="button" class="btn" data-act="pos-recenter">Center on position</button>
-      <button type="button" class="btn primary" data-close>Done</button>`,
-    onClose: () => {
-      if (positionMap) positionMap.remove();
-      positionMap = null;
-    }
-  });
+  closePositionView();
+  // Full screen: the chart fills it, the position floats over the top in a
+  // see-through panel, and the buttons sit at the corners.
+  const view = document.createElement('div');
+  view.className = 'pos-full';
+  view.id = 'pos-full';
+  view.innerHTML = `<div class="pos-map" id="pos-map"></div>
+    <div class="pos-panel">
+      <div id="pos-text">${positionFixHTML(freshFix())}</div>
+      <div class="pos-note">FAA sectional · for reference, not navigation · needs a connection the first time an area is viewed</div>
+    </div>
+    <button type="button" class="pos-close" data-act="pos-close" aria-label="Close chart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+    <button type="button" class="pos-recenter" data-act="pos-recenter">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      Center
+    </button>`;
+  document.body.appendChild(view);
+  document.documentElement.classList.add('pos-open');
   if (!window.L) return;
   const log = activeLog();
   const center = fix ? [fix.lat, fix.lon] : [39.5, -98.35];
@@ -885,8 +900,9 @@ function positionSheet() {
   // stretched to twice its pixels.
   const retina = (window.devicePixelRatio || 1) > 1.4;
   const map = L.map('pos-map', {
-    zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 13, zoomSnap: 1
+    zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 13, zoomSnap: 1
   }).setView(center, fix ? chartFullZoom() : 5);
+  L.control.zoom({ position: 'bottomleft' }).addTo(map);
   L.tileLayer(SECTIONAL_TILES, {
     detectRetina: true,
     minNativeZoom: retina ? 7 : 8,
@@ -960,7 +976,7 @@ function positionSheet() {
   pullTrack(activeLog());
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
   // the sheet animates in; let the map measure itself once it has
-  setTimeout(() => map.invalidateSize(), 260);
+  setTimeout(() => map.invalidateSize(), 60);
 }
 
 function drawTrackOnMap(fit) {
@@ -5364,6 +5380,7 @@ const actions = {
     }
     positionSheet();
   },
+  'pos-close': () => closePositionView(),
   'pos-recenter': () => {
     const fix = freshFix() || lastGpsFix;
     if (!positionMap || !fix) return;
@@ -5720,7 +5737,8 @@ document.addEventListener('focusout', () => {
 
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
-    if ($('#overlay').classList.contains('show')) closeSheet();
+    if ($('#pos-full')) closePositionView();
+    else if ($('#overlay').classList.contains('show')) closeSheet();
     else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   }
   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
