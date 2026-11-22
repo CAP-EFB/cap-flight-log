@@ -8,16 +8,16 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 ## What it does
 
-The tabs follow a sortie from briefing to signature: **Logbook → Plan → Fly → Notes → Debrief → Sign**.
+The tabs follow a sortie from briefing to signature: **Missions → Sorties → Fly → Notes → Debrief → Sign**.
 
-- **Logbook** — the first tab: every mission and its sorties, with totals (missions, sorties, Hobbs,
-  tracked distance). Add a mission (from WMIRS) or a sortie from here.
-- **Missions and sorties** — a mission holds one or more sorties. A new mission is set up in two steps at
-  the top of the Plan tab: add the mission from WMIRS (number required), then add its first sortie; the other
-  tabs open after that. The logo opens the list of all missions. The header's sortie switcher (or
-  Menu → + Sortie) starts the next sortie with the same crew, aircraft, frequencies and search area;
-  mission number, base, mission date and your name and CAPID are shared by every sortie.
-- **Plan** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
+- **Missions** — the first tab: every mission on this iPad, with totals (sorties, Hobbs, tracked
+  distance). The + button adds a mission from WMIRS (number required; date and base optional) and
+  opens Sorties with the form for its first sortie. Tapping a mission opens it on Sorties.
+- **Missions and sorties** — a mission holds one or more sorties. On Sorties, the + button (or the
+  header's sortie switcher, or Menu → + Sortie) starts the next sortie with the same crew, aircraft,
+  frequencies and search area; mission number, base, mission date and your name and CAPID are shared
+  by every sortie. Fly, Notes, Debrief and Sign open once the mission has a sortie.
+- **Sorties** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
   ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a), frequencies and nav aids.
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a

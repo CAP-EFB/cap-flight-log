@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.18.2';
+const APP_VERSION = '1.20.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1989,10 +1989,11 @@ function installBannerHTML() {
 
 const TABS = ['logbook', 'plan', 'fly', 'notes', 'debrief', 'sign'];
 
-// Where a sortie opens: Plan until it has a mission number, then Fly.
+// Where a sortie opens: Missions until one is picked, Sorties until it has a sortie, then Fly.
 function defaultTab(log) {
   const l = log || activeLog();
-  return l.missionCreated && l.started ? 'fly' : 'plan';
+  if (!l.missionCreated) return 'logbook';
+  return l.started ? 'fly' : 'plan';
 }
 
 // The sortie tabs only open once the mission exists and has a sortie.
@@ -2002,9 +2003,9 @@ function sortieReady(log) {
 }
 
 /* ---------- missions above sorties ----------
-   Missions (every mission on this iPad) → Mission (its shared details and its
-   sorties) → a sortie's tabs. The two mission screens sit above the tab bar's
-   Plan…Sign, which are always about one sortie. */
+   Missions (every mission on this iPad) → Sorties (the picked mission, its
+   sorties and the open sortie's set-up) → Fly…Sign, about one sortie.
+   Internally the first two tabs keep their old keys, 'logbook' and 'plan'. */
 const SCREENS = [];
 
 function missionIdsInOrder() {
@@ -2023,54 +2024,108 @@ function showScreen(screen) {
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
 
-/* ---------- Logbook ----------
+/* ---------- Missions tab ----------
    The first tab: every mission on this iPad with its sorties, newest first,
    and where a new mission (from WMIRS) or sortie is added. */
 function logbookView() {
-  const ids = missionIdsInOrder();
+  const ids = missionIdsInOrder().filter(id => state.logs.some(l => l.missionId === id && l.missionCreated));
   const sorties = state.logs.filter(l => l.started);
   const hobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
   const nm = sorties.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
-  const missionCards = ids.map(id => {
-    const all = state.logs.filter(l => l.missionId === id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+  const rows = ids.map(id => {
+    const all = state.logs.filter(l => l.missionId === id);
     const first = all[0];
     const flown = all.filter(l => l.started);
-    const created = !!first.missionCreated;
+    const missionHobbs = flown.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
     const current = id === activeLog().missionId;
-    return `<section class="card logbook-mission ${current ? 'current' : ''}">
-      <div class="card-head">
-        <div class="head-left">
-          <h2>${esc(first.mission || 'Mission not added yet')}</h2>
-          <span class="count-badge">${flown.length}</span>
-        </div>
-        <span class="muted small">${esc([first.sar.missionDate, first.base].filter(Boolean).join(' · '))}</span>
-      </div>
-      ${flown.length ? `<div class="log-list">${flown.map(sortieCardRowHTML).join('')}</div>` :
-        `<div class="empty" style="padding:8px 4px 12px">${created ? 'No sorties yet.' : 'This mission still needs its number.'}</div>`}
-      <div class="btn-row">
-        ${created
-          ? `<button class="btn small primary" data-act="add-sortie" data-mission="${esc(id)}">+ Sortie</button>`
-          : `<button class="btn small primary" data-act="open-mission" data-id="${esc(id)}">Finish adding the mission</button>`}
-        ${created ? `<button class="btn small" data-act="open-mission" data-id="${esc(id)}">Mission details</button>` : ''}
-      </div>
-    </section>`;
+    const meta = [first.sar.missionDate, first.base,
+      flown.length + ' sortie' + (flown.length === 1 ? '' : 's'),
+      missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
+    return `<button type="button" class="log-row mission-row ${current ? 'active' : ''}" data-act="open-mission" data-id="${esc(id)}">
+      <span class="log-name">${esc(first.mission)}</span>
+      <span class="log-meta">${esc(meta)}</span>
+      <svg class="row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>`;
   }).join('');
   return `<div class="stack">
     <section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>Logbook</h2></div>
-        <button class="btn small primary" data-act="new-log">+ Add mission</button>
+        <div class="head-left"><h2>Missions</h2><span class="count-badge">${ids.length}</span></div>
       </div>
-      <div class="totals" style="grid-template-columns:repeat(4,1fr);margin-top:0;padding-top:0;border-top:0">
-        <div class="total"><div class="tl">Missions</div><div class="tv">${ids.filter(id => state.logs.some(l => l.missionId === id && l.missionCreated)).length}</div></div>
+      <div class="totals" style="grid-template-columns:repeat(3,1fr);margin-top:0;padding-top:0;border-top:0">
         <div class="total"><div class="tl">Sorties</div><div class="tv">${sorties.length}</div></div>
         <div class="total"><div class="tl">Hobbs</div><div class="tv">${fmtDecimal(hobbs, 1) || '0.0'}</div></div>
         <div class="total"><div class="tl">Tracked</div><div class="tv">${Math.round(nm)} NM</div></div>
       </div>
+      ${rows ? `<div class="log-list" style="margin-top:12px">${rows}</div>`
+        : '<div class="empty" style="margin-top:12px"><strong>No missions yet</strong>Tap + to add a mission from WMIRS.</div>'}
       <div class="sheet-note">Missions are created in WMIRS. Add one here with its mission number, then add each sortie you fly on it. Everything stays on this iPad.</div>
     </section>
-    ${missionCards}
-  </div>`;
+  </div>
+  ${fabHTML('new-mission', 'Add a mission')}`;
+}
+
+// The round add button in the bottom corner: a mission on Missions, a sortie on Sorties.
+function fabHTML(act, label) {
+  return `<button type="button" class="fab" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+  </button>`;
+}
+
+// Adding a mission: its WMIRS number (required), date and base. Then its first sortie.
+function openNewMissionSheet() {
+  openSheet({
+    title: 'Add mission',
+    sub: 'From WMIRS',
+    body: `<div class="form-grid">
+      <label class="field span-2"><span>Mission number</span>
+        <input class="input" id="nm-number" autocapitalize="characters" placeholder="e.g. 24-001"></label>
+      <label class="field"><span>Mission date</span>
+        <div class="input-btn">
+          <input class="input mono" id="nm-date" autocapitalize="characters" placeholder="DD MMM YY">
+          <button type="button" class="mini" data-act="nm-today">Today</button>
+        </div></label>
+      <label class="field"><span>Base</span><input class="input" id="nm-base" autocapitalize="characters" placeholder="KBUY"></label>
+    </div>
+    <p class="sheet-note">Only the mission number is required. Date and base can be added later.</p>`,
+    footer: `<button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" data-act="nm-save">Add mission</button>`
+  });
+  const number = $('#nm-number');
+  if (number) setTimeout(() => number.focus(), 60);
+}
+
+function todayMissionDate() {
+  const now = new Date();
+  return pad2(now.getDate()) + ' ' + MONTHS[now.getMonth()] + ' ' + String(now.getFullYear()).slice(-2);
+}
+
+function saveNewMission() {
+  const number = $('#nm-number');
+  const value = String(number ? number.value : '').trim().toUpperCase();
+  if (!value) {
+    if (number) { number.classList.add('invalid'); number.focus(); }
+    toast('Enter the mission number');
+    return;
+  }
+  // reuse the empty record a fresh install starts with
+  const current = activeLog();
+  const log = !current.missionCreated && !current.started && !current.mission ? current : blankLog();
+  if (log !== current) state.logs.push(log);
+  log.mission = value;
+  log.sar.missionDate = String($('#nm-date').value || '').trim().toUpperCase();
+  log.base = String($('#nm-base').value || '').trim().toUpperCase();
+  log.missionCreated = true;
+  log.sortie = log.sortie || '1';
+  state.activeId = log.id;
+  closeSheet();
+  activeTab = 'plan';
+  save();
+  render();
+  window.scrollTo(0, 0);
+  toast('Mission ' + value + ' added · now its first sortie');
+  const first = $('#new-sortie-card [data-bind="aircraft"]');
+  if (first) setTimeout(() => first.focus(), 60);
 }
 
 function sortieCardRowHTML(l, index) {
@@ -2085,20 +2140,14 @@ function sortieCardRowHTML(l, index) {
   </button>`;
 }
 
-// The mission and its sorties: the top of the Plan tab, and all of it until a sortie exists.
+// The mission and its sorties: the top of the Sorties tab.
 function missionSectionsHTML(log) {
   const sar = log.sar;
   const sorties = missionSorties(log).filter(l => l.started);
-  const created = !!log.missionCreated;
-  const step = (n, text, status) => `<div class="step ${status}"><span class="step-num">${status === 'done' ? '✓' : n}</span>${text}</div>`;
-  return `<button type="button" class="back-link" data-act="show-missions">‹ Logbook</button>
-    ${sorties.length ? '' : `<div class="steps">
-      ${step(1, 'Add the mission', created ? 'done' : 'now')}
-      ${step(2, 'Add its first sortie', created ? 'now' : 'later')}
-    </div>`}
-    <section class="card ${created ? '' : 'card-current'}" id="mission-card">
+  return `<button type="button" class="back-link" data-act="show-missions">‹ Missions</button>
+    <section class="card" id="mission-card">
       <div class="card-head">
-        <div class="head-left"><h2>${created ? 'Mission' : 'Step 1 · Add the mission'}</h2></div>
+        <div class="head-left"><h2>Mission</h2></div>
         <span class="muted small">Shared by every sortie</span>
       </div>
       <div class="form-grid">
@@ -2111,29 +2160,41 @@ function missionSectionsHTML(log) {
         </label>
         ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
       </div>
-      ${created ? '' : `<div class="btn-row" style="margin-top:14px">
-        <button class="btn primary" data-act="create-mission">Add mission</button>
-        <span class="sheet-note" style="margin:0;align-self:center">The mission number is required. Date and base can be added later.</span>
-      </div>`}
     </section>
 
-    ${!created ? '' : sorties.length ? `<section class="card">
+    ${sorties.length ? `<section class="card">
       <div class="card-head">
         <div class="head-left"><h2>Sorties</h2><span class="count-badge">${sorties.length}</span></div>
-        <button class="btn small primary" data-act="add-sortie">+ Sortie</button>
       </div>
       <div class="log-list">${sorties.map(sortieCardRowHTML).join('')}</div>
-      <div class="sheet-note">Tap a sortie to open it. + Sortie starts the next one with the same crew, aircraft, frequencies and search area.</div>
-    </section>` : `<section class="card card-current">
-      <div class="card-head"><div class="head-left"><h2>Step 2 · Add the first sortie</h2></div></div>
-      <p class="sheet-note" style="margin-top:0">A sortie is one flight of this mission. Its crew, aircraft, search area, checkpoints and sign-off are set up on the tabs below once it exists.</p>
-      <button class="btn primary" data-act="add-sortie">+ First sortie</button>
+      <div class="sheet-note">Tap a sortie to open it. + starts the next one with the same crew, aircraft, frequencies and search area.</div>
+    </section>` : `<section class="card card-current" id="new-sortie-card">
+      <div class="card-head"><div class="head-left"><h2>New sortie</h2></div></div>
+      <p class="sheet-note" style="margin-top:0">A sortie is one flight of this mission. Crew, search area and the rest are set up once it is added.</p>
+      <div class="form-grid">
+        ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
+        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters' }))}
+        ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
+        ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn primary" data-act="add-sortie">Add sortie</button>
+      </div>
     </section>`}
-
-    ${created ? `<div class="btn-row">
-      <button class="btn small danger" data-act="del-mission">Delete mission</button>
-    </div>` : ''}
 `;
+}
+
+// The Sorties tab before a mission is picked.
+function noMissionHTML() {
+  return `<div class="stack">
+    <section class="card">
+      <div class="empty"><strong>No mission selected</strong>Pick a mission on the Missions tab, or add one from WMIRS.</div>
+      <div class="btn-row" style="justify-content:center">
+        <button class="btn" data-act="show-missions">Missions</button>
+        <button class="btn primary" data-act="new-mission">Add mission</button>
+      </div>
+    </section>
+  </div>`;
 }
 
 function opsCardHTML(log) {
@@ -2179,7 +2240,7 @@ function flyView(log) {
   </div>`;
 }
 
-// One column of the CAPF 104a plan-versus-actual grid: planned on Plan, actual on Debrief.
+// One column of the CAPF 104a plan-versus-actual grid: planned on Sorties, actual on Debrief.
 function sarColumnHTML(log, column) {
   const values = log.sar[column];
   const text = ([key, label, opts]) => field(label, textInput('sar.' + column + '.' + key, values[key], opts));
@@ -2202,7 +2263,8 @@ function planView(log) {
     <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
   </div>`).join('');
 
-  // Until the mission exists and has a sortie, Plan is only the two set-up steps.
+  if (!log.missionCreated) return noMissionHTML();
+  // Until the mission has a sortie, the tab is the mission and the new-sortie form.
   if (!sortieReady(log)) return `<div class="stack">${missionSectionsHTML(log)}</div>`;
 
   return `<div class="stack">
@@ -2317,7 +2379,8 @@ function planView(log) {
       </div>
       <div class="nav-grid">${navRows}</div>
     </section>
-  </div>`;
+  </div>
+  ${fabHTML('add-sortie', 'Add the next sortie')}`;
 }
 
 function debriefView(log) {
@@ -3615,7 +3678,7 @@ function menuSheet() {
       <div class="sheet-section">
         <h3>Missions</h3>
         <div class="btn-row">
-          <button type="button" class="btn small" data-act="show-missions">Logbook (${missionIdsInOrder().length})</button>
+          <button type="button" class="btn small" data-act="show-missions">Missions</button>
           <button type="button" class="btn small" data-act="edit-mission">This mission</button>
           <button type="button" class="btn small" data-act="new-log">+ New mission</button>
         </div>
@@ -3988,14 +4051,7 @@ function nextSortieNumber(sorties) {
 }
 
 function createLog() {
-  const log = blankLog();
-  state.logs.push(log);
-  state.activeId = log.id;
-  closeSheet();
-  activeTab = 'plan';
-  save();
-  render();
-  toast('Add the mission from WMIRS: enter its number');
+  openNewMissionSheet();
 }
 
 // The next sortie of this mission: same crew, aircraft, frequencies and search
@@ -4003,8 +4059,7 @@ function createLog() {
 function addSortie() {
   const current = activeLog();
   if (!current.missionCreated) {
-    switchTab('plan');
-    toast('Add the mission first');
+    openNewMissionSheet();
     return;
   }
   const placeholder = missionSorties(current).find(l => !l.started);
@@ -5242,6 +5297,7 @@ const actions = {
     toast('Find the steps later under Menu → Help & install');
   },
   'edit-mission': () => {
+    if (!activeLog().missionCreated) { openNewMissionSheet(); return; }
     switchTab('plan');
     const number = $('#mission-card [data-bind="mission"]');
     if (number && !number.value) number.focus();
@@ -5255,20 +5311,9 @@ const actions = {
     switchTab('plan');
   },
   'del-mission': () => deleteMission(),
-  'create-mission': () => {
-    const log = activeLog();
-    const number = $('#mission-card [data-bind="mission"]');
-    if (!String(log.mission || '').trim()) {
-      if (number) { number.classList.add('invalid'); number.focus(); }
-      toast('Enter the mission number first');
-      return;
-    }
-    log.missionCreated = true;
-    syncMissionField(log, 'missionCreated');
-    save();
-    render();
-    toast('Mission added · now add its first sortie');
-  },
+  'new-mission': () => openNewMissionSheet(),
+  'nm-save': () => saveNewMission(),
+  'nm-today': () => { const d = $('#nm-date'); if (d) d.value = todayMissionDate(); },
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
     const card = $('#ops-card');
@@ -5617,10 +5662,10 @@ const actions = {
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) return;
-  // Only Plan opens until the mission exists and has a sortie.
+  // Only Missions and Sorties open until a mission with a sortie is picked.
   if (tab !== 'plan' && tab !== 'logbook' && !sortieReady()) {
-    tab = 'plan';
-    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Add the mission first');
+    tab = activeLog().missionCreated ? 'plan' : 'logbook';
+    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Pick or add a mission first');
   }
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
@@ -5982,8 +6027,8 @@ async function boot() {
   }
 
   state = loaded ? normalizeState(loaded) : newState();
-  // open where the crew left off: a sortie in progress on Fly, otherwise the Logbook
-  activeTab = sortieRunning(activeLog()) ? 'fly' : (state.logs.some(l => l.missionCreated) ? 'logbook' : 'plan');
+  // open where the crew left off: a sortie in progress on Fly, otherwise Missions
+  activeTab = sortieRunning(activeLog()) ? 'fly' : 'logbook';
   applyTheme();
   render();
   if (termsNeeded()) termsSheet(true);
