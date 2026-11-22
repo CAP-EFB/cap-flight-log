@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 160" width="600" height="160">
   <!-- Faint chart texture for the top bar. Tiles left to right: every line that
        crosses the tile leaves and enters at the same height, running level. -->
-  <g fill="none" stroke="#8fc3f2" stroke-linecap="round">
+  <g fill="none" stroke="#c7d0f5" stroke-linecap="round">
     <!-- graticule -->
     <g stroke-opacity=".055" stroke-width="1">
       <path d="M60 0v160M180 0v160M300 0v160M420 0v160M540 0v160"/>
@@ -25,7 +25,7 @@
       <path d="M106 106c9-4 24-3 28 2s-3 10-14 11-21-2-23-6 2-4 9-7Z"/>
     </g>
     <!-- a river -->
-    <path stroke="#4ea8f5" stroke-opacity=".16" stroke-width="1.6"
+    <path stroke="#ffcd00" stroke-opacity=".16" stroke-width="1.6"
       d="M0 58C50 58 70 78 120 76S190 52 250 60S330 108 400 104S470 74 520 78S570 58 600 58"/>
   </g>
 </svg>
