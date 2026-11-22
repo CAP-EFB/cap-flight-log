@@ -27,6 +27,13 @@
         <div class="brand" data-act="show-missions" role="button" tabindex="0" aria-label="All missions" title="All missions">
           <img class="brand-logo" src="icons/logo.png" alt="Mission Log" width="148" height="46">
         </div>
+        <span class="brand-pipe gps-pipe" aria-hidden="true"></span>
+        <button class="gps-chip" id="gpsChip" type="button" data-act="gps-chip" data-level="off" aria-label="GPS status">
+          <span class="gps-pos mono" id="gpsPos" hidden></span>
+          <span class="gps-grid" id="gpsGrid" hidden></span>
+          <span class="gps-sep" id="gpsSep" aria-hidden="true" hidden></span>
+          <span class="gps-meta"><svg class="gps-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 6-6-4-4Z"/><path d="m16 8 3-3"/><path d="M9 21a6 6 0 0 0-6-6"/></svg><span id="gpsLabel">GPS off</span></span>
+        </button>
         <span class="brand-pipe" aria-hidden="true"></span>
         <div class="mission-bar">
           <button class="mission-strip" type="button" data-act="edit-mission" aria-label="Edit mission details">
@@ -40,10 +47,6 @@
           <button class="mission-strip-sub" id="stripSub" type="button" data-act="edit-mission" aria-label="Edit mission details"></button>
         </div>
         <div class="top-actions">
-          <button class="gps-chip" id="gpsChip" type="button" data-act="gps-chip" data-level="off" aria-label="GPS status">
-            <span class="gps-pos mono" id="gpsPos" hidden></span>
-            <span class="gps-meta"><svg class="gps-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 6-6-4-4Z"/><path d="m16 8 3-3"/><path d="M9 21a6 6 0 0 0-6-6"/></svg><span id="gpsLabel">GPS off</span><span class="gps-grid" id="gpsGrid" hidden></span></span>
-          </button>
           <div class="brand-sub"><span class="save-dot" id="saveDot"></span><span id="saveLabel">On this device</span></div>
           <button class="icon-btn" type="button" data-act="print" aria-label="Print or save PDF" title="Print / Save PDF">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

@@ -183,16 +183,15 @@ h1, h2, h3, p { margin: 0; }
   object-fit: contain;
 }
 
-/* GPS in the header, on every tab: position on top, then fix quality and grid */
+/* GPS in the header, on every tab, after the logo: position · grid | fix quality */
 .gps-chip {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 1px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   min-height: 40px;
   padding: 2px 8px;
-  margin-right: 2px;
+  margin-left: -8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -204,10 +203,11 @@ h1, h2, h3, p { margin: 0; }
   appearance: none;
 }
 .gps-chip:active { background: var(--chrome-press); }
-.gps-pos { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
-.gps-pos[hidden], .gps-grid[hidden] { display: none; }
-.gps-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; color: var(--chrome-muted); }
-.gps-grid { color: var(--chrome-text); }
+.gps-pos { font-size: 13px; font-weight: 600; letter-spacing: .01em; flex: none; }
+.gps-grid { font-size: 12px; font-weight: 600; color: var(--chrome-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gps-pos[hidden], .gps-grid[hidden], .gps-sep[hidden] { display: none; }
+.gps-sep { flex: none; width: 1px; height: 18px; background: rgba(255, 255, 255, .28); }
+.gps-meta { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: var(--chrome-muted); }
 /* satellite icon, coloured by fix quality */
 .gps-icon { width: 15px; height: 15px; flex: none; color: var(--chrome-muted); }
 .gps-chip[data-level="ok"] .gps-icon { color: var(--green); }
@@ -215,7 +215,7 @@ h1, h2, h3, p { margin: 0; }
 .gps-chip[data-level="bad"] .gps-icon { color: var(--red); }
 @media (max-width: 700px) { .gps-pos { display: none; } }
 /* Slide Over and narrow Split View: just the satellite icon, coloured by fix quality */
-@media (max-width: 440px) { #gpsLabel, .gps-grid { display: none; } }
+@media (max-width: 440px) { #gpsLabel, .gps-grid, .gps-sep { display: none; } }
 
 /* the header logo: airplane and wordmark in one image */
 .brand-logo { display: block; width: auto; height: 46px; }
@@ -377,8 +377,9 @@ h1, h2, h3, p { margin: 0; }
    top; mission, sortie and crew underneath with the full width to themselves. */
 @media (max-width: 1199px) {
   .topbar-row { flex-wrap: wrap; row-gap: 0; padding-bottom: 4px; }
-  .brand { flex: 1; }
-  .brand-pipe { display: none; }
+  .brand-pipe:not(.gps-pipe) { display: none; }
+  .gps-chip { flex: 0 1 auto; }
+  .top-actions { margin-left: auto; }
   .mission-bar {
     order: 3;
     flex-basis: 100%;

@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.21.1';
+const APP_VERSION = '1.21.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1027,7 +1027,7 @@ function renderGpsChip() {
   else if (fix) {
     const metres = Math.round(fix.accuracy);
     level = metres <= 50 ? 'ok' : 'warn';
-    text = 'GPS ±' + (metres >= 1000 ? (metres / 1000).toFixed(1) + ' km' : metres + ' m');
+    text = '±' + (metres >= 1000 ? (metres / 1000).toFixed(1) + ' km' : metres + ' m');
   } else if (gpsState === 'on') { level = 'warn'; text = 'GPS lost'; }
   else { level = 'warn'; text = 'GPS searching'; }
   chip.dataset.level = level;
@@ -1044,8 +1044,11 @@ function renderGpsChip() {
     // sectional grid and lat/long cell, whichever apply here
     const names = fix ? [capGridName(fix.lat, fix.lon), capCellName(fix.lat, fix.lon)].filter(Boolean) : [];
     grid.hidden = !names.length;
-    grid.textContent = names.length ? '· ' + names.join(' · ') : '';
+    grid.textContent = names.join(' · ');
   }
+  // position | fix quality
+  const sep = $('#gpsSep');
+  if (sep) sep.hidden = !fix;
 }
 
 function gpsErrorText(error) {
