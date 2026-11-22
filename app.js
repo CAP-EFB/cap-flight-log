@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.15.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -612,6 +612,7 @@ function startGpsWatch() {
       };
       gpsState = 'on';
       renderGpsChip();
+      updatePositionSheet();
       if (sortieActivityOn && capGridName(lastGpsFix.lat, lastGpsFix.lon) !== lastActivityGrid) syncSortieActivity();
     },
     error => {
@@ -696,6 +697,144 @@ function capCellName(lat, lon) {
     letters += 'ABCD'[((down >> shift) & 1) * 2 + ((across >> shift) & 1)];
   }
   return pad2(blockLat) + String(blockLon).padStart(3, '0') + letters;
+}
+
+/* ---------- position sheet ----------
+   Tapping the GPS readout in the header: the position in large type, in every
+   format, with the CAP grid and cell, on the FAA sectional chart. For
+   reference, not navigation. Chart tiles come from the FAA's public tile
+   service and need a connection; ones already viewed stay in the cache. */
+const SECTIONAL_TILES = 'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}';
+let positionMap = null;
+
+function positionFixHTML(fix) {
+  if (!fix) {
+    return `<div class="pos-none">No current GPS fix.${lastGpsFix ? ' Showing the last one, from ' + esc(fmtZ(hhmmFromMs(lastGpsFix.at))) + '.' : ''}</div>`;
+  }
+  const grid = capGridName(fix.lat, fix.lon);
+  const cell = capCellName(fix.lat, fix.lon);
+  return `<div class="pos-big mono">
+      <div>${esc(fmtCoord(fix.lat, true))}</div>
+      <div>${esc(fmtCoord(fix.lon, false))}</div>
+    </div>
+    <div class="pos-facts">
+      <div><span>Grid</span><b class="mono">${esc(grid || '—')}</b></div>
+      <div><span>Cell</span><b class="mono">${esc(cell || '—')}</b></div>
+      <div><span>Accuracy</span><b>±${Math.round(fix.accuracy)} m</b></div>
+      <div><span>Fix</span><b class="mono">${esc(fmtZ(hhmmFromMs(fix.at)))}</b></div>
+    </div>
+    <div class="pos-other mono">${esc(fmtCoordDecimal(fix.lat))}, ${esc(fmtCoordDecimal(fix.lon))}  ·  ${esc(fmtCoordDms(fix.lat, true))}  ${esc(fmtCoordDms(fix.lon, false))}</div>`;
+}
+
+function positionSheet() {
+  const fix = freshFix() || lastGpsFix;
+  openSheet({
+    title: 'Position',
+    sub: 'Live GPS on the FAA sectional · for reference, not navigation',
+    body: `<div id="pos-text">${positionFixHTML(freshFix())}</div>
+      <div class="pos-map" id="pos-map"></div>
+      <div class="sheet-note">Chart: FAA Aeronautical Information Services. It needs a connection the first time an area is viewed.</div>`,
+    footer: `<button type="button" class="btn" data-act="pos-recenter">Center on position</button>
+      <button type="button" class="btn primary" data-close>Done</button>`,
+    onClose: () => {
+      if (positionMap) positionMap.remove();
+      positionMap = null;
+    }
+  });
+  if (!window.L) return;
+  const log = activeLog();
+  const center = fix ? [fix.lat, fix.lon] : [39.5, -98.35];
+  const map = L.map('pos-map', { zoomControl: true, attributionControl: true, minZoom: 5, maxZoom: 14 })
+    .setView(center, fix ? 10 : 5);
+  L.tileLayer(SECTIONAL_TILES, {
+    minNativeZoom: 8, maxNativeZoom: 12, minZoom: 5, maxZoom: 14,
+    attribution: 'FAA AIS · not for navigation'
+  }).addTo(map);
+  // CAP grid over the chart: 15-minute grid lines with their numbers, and the
+  // 7.5-minute quarters dashed when zoomed in. Redrawn for what is on screen.
+  const gridLayer = L.layerGroup().addTo(map);
+  const drawGrid = () => {
+    gridLayer.clearLayers();
+    const zoom = map.getZoom();
+    if (zoom < 7) return;
+    const b = map.getBounds();
+    const step = 0.25;
+    const quarter = zoom >= 10;
+    CAP_SECTIONALS.forEach(([id, north, south, westW, eastW]) => {
+      const west = -westW;
+      const east = -eastW;
+      const s0 = Math.max(south, b.getSouth()), n0 = Math.min(north, b.getNorth());
+      const w0 = Math.max(west, b.getWest()), e0 = Math.min(east, b.getEast());
+      if (s0 >= n0 || w0 >= e0) return;
+      const lines = [];
+      const inc = quarter ? step / 2 : step;
+      for (let lat = Math.ceil(s0 / inc) * inc; lat <= n0 + 1e-9; lat += inc) {
+        const major = Math.abs(lat / step - Math.round(lat / step)) < 1e-6;
+        lines.push([[[lat, w0], [lat, e0]], major]);
+      }
+      for (let lon = Math.ceil(w0 / inc) * inc; lon <= e0 + 1e-9; lon += inc) {
+        const major = Math.abs(lon / step - Math.round(lon / step)) < 1e-6;
+        lines.push([[[s0, lon], [n0, lon]], major]);
+      }
+      lines.forEach(([pts, major]) => L.polyline(pts, {
+        color: '#7a1fa2', weight: major ? 1.6 : 0.8, opacity: major ? 0.85 : 0.6,
+        dashArray: major ? null : '4 4', interactive: false
+      }).addTo(gridLayer));
+      if (zoom < 9) return;
+      // a number in each 15-minute grid, using the CAP rule for overlapping charts
+      for (let top = Math.ceil(s0 / step) * step + step; top <= n0 + 1e-9; top += step) {
+        for (let left = Math.floor(w0 / step) * step; left < e0 - 1e-9; left += step) {
+          const name = capGridName(top - 0.01, left + 0.01);
+          if (!name || !name.startsWith(id + ' ')) continue;
+          L.marker([top - step / 2, left + step / 2], {
+            interactive: false,
+            icon: L.divIcon({ className: 'grid-label', html: esc(name.replace(/ [ABCD]$/, '')), iconSize: null })
+          }).addTo(gridLayer);
+        }
+      }
+    });
+  };
+  map.on('moveend', drawGrid);
+  drawGrid();
+
+  // the sortie's search area, when its corners are set
+  const corners = ['nw', 'ne', 'se', 'sw'].map(key => {
+    const c = log.sar.corners[key];
+    const lat = parseLat(c.lat);
+    const lon = parseLon(c.lon);
+    return lat != null && lon != null ? [lat, lon] : null;
+  });
+  if (corners.every(Boolean)) {
+    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.08, dashArray: '6 4' }).addTo(map);
+  }
+  const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
+  const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
+  if (fix) { accuracy.addTo(map); dot.addTo(map); }
+  positionMap = { map, dot, accuracy, follow: true, remove: () => map.remove() };
+  map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
+  // the sheet animates in; let the map measure itself once it has
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+// Keep the open position sheet moving with each new fix.
+function updatePositionSheet() {
+  if (!positionMap) return;
+  const fix = freshFix();
+  const text = $('#pos-text');
+  if (text) text.innerHTML = positionFixHTML(fix);
+  if (!fix) return;
+  const at = [fix.lat, fix.lon];
+  if (!positionPinned()) {
+    positionMap.dot.addTo(positionMap.map);
+    positionMap.accuracy.addTo(positionMap.map);
+  }
+  positionMap.dot.setLatLng(at);
+  positionMap.accuracy.setLatLng(at).setRadius(fix.accuracy);
+  if (positionMap.follow) positionMap.map.panTo(at, { animate: true });
+}
+
+function positionPinned() {
+  return positionMap && positionMap.map.hasLayer(positionMap.dot);
 }
 
 function renderGpsChip() {
@@ -1475,7 +1614,6 @@ function render() {
 
   if (!TABS.includes(activeTab) && !SCREENS.includes(activeTab)) activeTab = defaultTab(log);
   if (activeTab === 'missions') view.innerHTML = missionsView();
-  else if (activeTab === 'mission') view.innerHTML = missionView(log);
   else if (activeTab === 'plan') view.innerHTML = planView(log);
   else if (activeTab === 'fly') view.innerHTML = flyView(log);
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
@@ -1667,7 +1805,7 @@ const TABS = ['plan', 'fly', 'notes', 'debrief', 'sign'];
 // Where a sortie opens: Plan until it has a mission number, then Fly.
 function defaultTab(log) {
   const l = log || activeLog();
-  return l.missionCreated && l.started ? 'fly' : 'mission';
+  return l.missionCreated && l.started ? 'fly' : 'plan';
 }
 
 // The sortie tabs only open once the mission exists and has a sortie.
@@ -1680,7 +1818,7 @@ function sortieReady(log) {
    Missions (every mission on this iPad) → Mission (its shared details and its
    sorties) → a sortie's tabs. The two mission screens sit above the tab bar's
    Plan…Sign, which are always about one sortie. */
-const SCREENS = ['missions', 'mission'];
+const SCREENS = ['missions'];
 
 function missionIdsInOrder() {
   const ids = [];
@@ -1733,13 +1871,13 @@ function sortieCardRowHTML(l, index) {
   </button>`;
 }
 
-function missionView(log) {
+// The mission and its sorties: the top of the Plan tab, and all of it until a sortie exists.
+function missionSectionsHTML(log) {
   const sar = log.sar;
   const sorties = missionSorties(log).filter(l => l.started);
   const created = !!log.missionCreated;
   const step = (n, text, status) => `<div class="step ${status}"><span class="step-num">${status === 'done' ? '✓' : n}</span>${text}</div>`;
-  return `<div class="stack">
-    <button type="button" class="back-link" data-act="show-missions">‹ All missions</button>
+  return `<button type="button" class="back-link" data-act="show-missions">‹ All missions</button>
     ${sorties.length ? '' : `<div class="steps">
       ${step(1, 'Create the mission', created ? 'done' : 'now')}
       ${step(2, 'Add its first sortie', created ? 'now' : 'later')}
@@ -1781,7 +1919,7 @@ function missionView(log) {
     ${created ? `<div class="btn-row">
       <button class="btn small danger" data-act="del-mission">Delete mission</button>
     </div>` : ''}
-  </div>`;
+`;
 }
 
 function opsCardHTML(log) {
@@ -1850,11 +1988,15 @@ function planView(log) {
     <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
   </div>`).join('');
 
+  // Until the mission exists and has a sortie, Plan is only the two set-up steps.
+  if (!sortieReady(log)) return `<div class="stack">${missionSectionsHTML(log)}</div>`;
+
   return `<div class="stack">
-    <section class="card">
+    ${missionSectionsHTML(log)}
+    <section class="card" id="sortie-card">
       <div class="card-head">
-        <div class="head-left"><h2>Sortie</h2></div>
-        <button class="btn small" data-act="edit-mission">Mission ${esc(log.mission || 'details')} ›</button>
+        <div class="head-left"><h2>${esc(sortieLabel(log, missionSorties(log).indexOf(log)))}</h2></div>
+        <span class="muted small">This sortie only</span>
       </div>
       <div class="form-grid">
         ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
@@ -3627,7 +3769,7 @@ function createLog() {
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
-  activeTab = 'mission';
+  activeTab = 'plan';
   save();
   render();
   toast('New mission started');
@@ -3638,7 +3780,7 @@ function createLog() {
 function addSortie() {
   const current = activeLog();
   if (!current.missionCreated) {
-    showScreen('mission');
+    switchTab('plan');
     toast('Create the mission first');
     return;
   }
@@ -3691,7 +3833,7 @@ function deleteMission() {
   state.logs = state.logs.filter(l => l.missionId !== log.missionId);
   if (!state.logs.length) state.logs.push(blankLog());
   state.activeId = state.logs[state.logs.length - 1].id;
-  activeTab = state.logs.length === 1 && !state.logs[0].mission ? 'mission' : 'missions';
+  activeTab = state.logs.length === 1 && !state.logs[0].mission ? 'plan' : 'missions';
   save();
   render();
   toast('Mission deleted');
@@ -4877,7 +5019,7 @@ const actions = {
     toast('Find the steps later under Menu → Help & install');
   },
   'edit-mission': () => {
-    showScreen('mission');
+    switchTab('plan');
     const number = $('#mission-card [data-bind="mission"]');
     if (number && !number.value) number.focus();
   },
@@ -4887,7 +5029,7 @@ const actions = {
     if (!sorties.length) return;
     state.activeId = sorties[sorties.length - 1].id;
     save();
-    showScreen('mission');
+    switchTab('plan');
   },
   'del-mission': () => deleteMission(),
   'create-mission': () => {
@@ -5008,12 +5150,18 @@ const actions = {
       state.settings.gpsLive = true;
       save();
     }
-    if (gpsState === 'denied') { toast(gpsErrorText({ code: 1 })); return; }
-    if (gpsState === 'unavailable') { toast(gpsErrorText(window.isSecureContext ? { unsupported: true } : { secure: true })); return; }
-    if (gpsWatchId == null) { startGpsWatch(); toast('Looking for a GPS fix…'); return; }
-    const fix = freshFix();
-    toast(fix ? coordPair(fmtCoord(fix.lat, true), fmtCoord(fix.lon, false)) + ' · ±' + Math.round(fix.accuracy) + ' m'
-              : 'No GPS fix yet. Move where the iPad can see the sky.');
+    if (!lastGpsFix) {
+      if (gpsState === 'denied') { toast(gpsErrorText({ code: 1 })); return; }
+      if (gpsState === 'unavailable') { toast(gpsErrorText(window.isSecureContext ? { unsupported: true } : { secure: true })); return; }
+      if (gpsWatchId == null) startGpsWatch();
+    }
+    positionSheet();
+  },
+  'pos-recenter': () => {
+    const fix = freshFix() || lastGpsFix;
+    if (!positionMap || !fix) return;
+    positionMap.follow = true;
+    positionMap.map.setView([fix.lat, fix.lon], Math.max(positionMap.map.getZoom(), 10));
   },
   'add-obs': () => addObservation(),
   'del-obs': el => {
@@ -5223,11 +5371,10 @@ const actions = {
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) return;
-  // A sortie's tabs stay shut until the mission exists and has a sortie.
-  if (!sortieReady()) {
-    showScreen('mission');
+  // Only Plan opens until the mission exists and has a sortie.
+  if (tab !== 'plan' && !sortieReady()) {
+    tab = 'plan';
     toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Create the mission first');
-    return;
   }
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
