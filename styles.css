@@ -137,8 +137,24 @@ h1, h2, h3, p { margin: 0; }
   top: 0;
   z-index: 30;
   padding-top: max(8px, env(safe-area-inset-top));
-  background: var(--chrome-bg);
-  border-bottom: 1px solid var(--chrome-line);
+  /* navy with a faint chart texture (contours, a river, a graticule) that
+     thins out towards the bottom edge */
+  background:
+    linear-gradient(to bottom, transparent 35%, var(--chrome-bg) 100%),
+    var(--chrome-bg) url(icons/header-map.svg) repeat-x left top / 600px 160px;
+}
+
+/* no hard line under the bar: it fades into the page */
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 18px;
+  background: linear-gradient(to bottom, var(--chrome-bg), transparent);
+  opacity: .75;
+  pointer-events: none;
 }
 
 .topbar-row {
@@ -166,6 +182,38 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: none;
   object-fit: contain;
 }
+
+/* GPS in the header, on every tab: position on top, then fix quality and grid */
+.gps-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  min-height: 40px;
+  padding: 2px 8px;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--chrome-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.gps-chip:active { background: var(--chrome-press); }
+.gps-pos { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+.gps-pos[hidden], .gps-grid[hidden] { display: none; }
+.gps-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; color: var(--chrome-muted); }
+.gps-grid { color: var(--chrome-text); }
+/* satellite icon, coloured by fix quality */
+.gps-icon { width: 15px; height: 15px; flex: none; color: var(--chrome-muted); }
+.gps-chip[data-level="ok"] .gps-icon { color: var(--green); }
+.gps-chip[data-level="warn"] .gps-icon { color: var(--amber); }
+.gps-chip[data-level="bad"] .gps-icon { color: var(--red); }
+@media (max-width: 700px) { .gps-pos { display: none; } }
 
 /* the header logo: airplane and wordmark in one image */
 .brand-logo { display: block; width: auto; height: 46px; }
@@ -504,35 +552,37 @@ select.input {
 
 /* ---------- quick checkpoints ---------- */
 
+/* all seven checkpoints on one row; wraps to four across on narrow screens */
 .quick-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
 }
-@media (max-width: 700px) { .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .quick-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
 .quick {
-  min-height: 66px;
-  padding: 9px 11px;
+  min-height: 92px;
+  padding: 10px 4px 8px;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 3px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--card-2);
   color: var(--text);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: background .12s ease, border-color .12s ease;
 }
 .quick:active { transform: scale(.98); }
+.quick-icon { width: 28px; height: 28px; flex: none; color: var(--blue); }
+.quick-label { font-size: 12.5px; font-weight: 650; line-height: 1.15; }
+.quick-time { font-size: 12.5px; min-height: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .quick.done { background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
-.quick-label { font-size: 13.5px; font-weight: 650; line-height: 1.2; }
-.quick-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.quick.done .quick-icon { color: var(--green); }
 .quick.done .quick-time { color: var(--green); font-weight: 700; }
-.quick.custom { border-style: dashed; background: transparent; }
 
 /* ---------- status banner ---------- */
 
@@ -1112,6 +1162,25 @@ a.menu-item { text-decoration: none; }
 .seg button.active { background: var(--blue-btn); color: #fff; }
 .seg.wrap { display: flex; flex-wrap: wrap; }
 
+/* ---------- install prompt ---------- */
+
+.install-banner {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line));
+  background: var(--blue-soft);
+}
+.install-banner img { flex: none; width: 52px; height: 52px; border-radius: 12px; }
+.install-text { min-width: 0; }
+.install-text h3 { font-size: 15.5px; font-weight: 700; margin-bottom: 3px; }
+.install-text p { font-size: 13.5px; line-height: 1.45; }
+.install-text .install-warn { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.install-text .btn-row { margin-top: 10px; }
+.inline-icon { width: 17px; height: 17px; vertical-align: -3px; color: var(--blue); }
+
 /* ---------- Hobbs keypad ---------- */
 
 .keypad {
@@ -1146,6 +1215,33 @@ a.menu-item { text-decoration: none; }
   text-align: center;
   letter-spacing: .03em;
 }
+/* one or two readings above the keypad; the highlighted one takes the keys */
+.meter-entries { display: grid; grid-template-columns: 1fr; gap: 10px; max-width: 380px; margin: 0 auto; }
+.meter-entries.two { grid-template-columns: 1fr 1fr; }
+.meter-entry { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.meter-entry > span {
+  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted); text-align: center;
+}
+.meter-entries.two .input.hobbs-big { font-size: 26px; min-height: 60px; }
+.meter-entries.two .input.hobbs-big.kp-active { border-color: var(--blue); box-shadow: 0 0 0 3px var(--focus); }
+
+/* Hobbs and tach summary on the Sign tab: end above start, as on the CAP form */
+.meter-grid {
+  display: grid;
+  grid-template-columns: 110px 1fr 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+.meter-head {
+  font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+}
+.meter-label { font-size: 14px; font-weight: 650; line-height: 1.2; }
+.meter-label small { display: block; font-size: 10.5px; color: var(--muted); font-weight: 500; margin-top: 1px; }
+.meter-value { font-size: 17px; padding: 0 12px; min-height: 44px; display: flex; align-items: center; }
+.meter-value.strong { font-weight: 700; }
+@media (max-width: 620px) { .meter-grid { grid-template-columns: 70px 1fr 1fr; } }
+
 /* a carried-forward reading that the next digit will replace */
 .input.fresh { background: var(--blue-soft); border-color: var(--blue); }
 
@@ -1257,23 +1353,6 @@ a.menu-item { text-decoration: none; }
   cursor: pointer;
   white-space: nowrap;
 }
-
-/* ---------- intro / hints ---------- */
-
-.intro {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 13px 14px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
-  background: var(--blue-soft);
-}
-.intro-icon { flex: none; width: 28px; height: 28px; color: var(--blue); }
-.intro-icon svg { width: 28px; height: 28px; }
-.intro h3 { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
-.intro p { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
-.intro .btn { margin-top: 9px; }
 
 /* ---------- print ---------- */
 

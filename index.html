@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>CAP Flight Log</title>
+  <title>Mission Log</title>
   <meta name="description" content="Offline CAP observer mission log, checklist and sketch pad.">
   <meta name="theme-color" content="#1c2632">
   <meta name="format-detection" content="telephone=no">
 
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="CAP Flight Log">
+  <meta name="apple-mobile-web-app-title" content="Mission Log">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
 
   <link rel="manifest" href="manifest.webmanifest">
@@ -24,7 +24,7 @@
     <header class="topbar">
       <div class="topbar-row">
         <div class="brand">
-          <img class="brand-logo" src="icons/logo.png" alt="CAP Flight Log" width="148" height="46">
+          <img class="brand-logo" src="icons/logo.png" alt="Mission Log" width="148" height="46">
         </div>
         <span class="brand-pipe" aria-hidden="true"></span>
         <button class="mission-strip" type="button" data-act="edit-mission" aria-label="Edit mission details">
@@ -33,6 +33,10 @@
           <span class="mission-strip-sub" id="stripSub"></span>
         </button>
         <div class="top-actions">
+          <button class="gps-chip" id="gpsChip" type="button" data-act="gps-chip" data-level="off" aria-label="GPS status">
+            <span class="gps-pos mono" id="gpsPos" hidden></span>
+            <span class="gps-meta"><svg class="gps-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 6-6-4-4Z"/><path d="m16 8 3-3"/><path d="M9 21a6 6 0 0 0-6-6"/></svg><span id="gpsLabel">GPS off</span><span class="gps-grid" id="gpsGrid" hidden></span></span>
+          </button>
           <div class="brand-sub"><span class="save-dot" id="saveDot"></span><span id="saveLabel">On this device</span></div>
           <button class="icon-btn" type="button" data-act="print" aria-label="Print or save PDF" title="Print / Save PDF">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -96,7 +100,7 @@
 
   <noscript>
     <div style="padding:24px;font-family:system-ui,sans-serif">
-      <h1>CAP Flight Log</h1>
+      <h1>Mission Log</h1>
       <p>This app needs JavaScript. Enable it in Settings → Safari → Advanced, then reload.</p>
     </div>
   </noscript>

@@ -1,4 +1,4 @@
-# CAP Flight Log
+# Mission Log
 
 An offline, iPad-first version of the CAP Observer Mission Log kneeboard card. It runs as a
 single-page web app, installs to the iPad home screen, autosaves on the device, and prints a
@@ -14,10 +14,12 @@ two-page mission log to PDF (long logs can add a continuation page).
   Shut Down and Custom entries. Each tap stamps the current UTC time and carries Hobbs and
   the last position forward. A large keypad then asks for the Hobbs reading (switch it off in Settings).
 - **GPS** — Use the iPad's location to fill entry/exit points, log entries and observations.
-  Optional **Auto-capture GPS** stamps every checkpoint and new observation. Accuracy is stored
-  and shown on the entry.
+  **Live GPS** (on by default, Settings to switch off) shows fix status and accuracy in the header and
+  starts checkpoints, new entries and observations at the current position. Accuracy is stored and
+  shown on the entry.
 - **Times** — the six flight times, computed flight time, engine run, tach and Hobbs used.
-  Tach start/end are entered on the Log tab.
+  Engine Start and Shut Down ask for both Hobbs and tach. The Sign tab shows Hobbs and tach end, start and
+  total, with Hobbs split into In Area and To/From as the WMIRS debrief wants.
 - **OPS status** — 30-minute checks with time, Hobbs, fuel, altimeter and an OPS-normal flag,
   plus a next-due reminder on the log tab.
 - **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
@@ -104,7 +106,7 @@ Edit and commit on `main`, then publish the static files:
 
 ```sh
 git add .
-git commit -m "CAP Flight Log 1.3.0"
+git commit -m "Mission Log 1.3.0"
 git push origin main
 ./deploy-pages.sh
 ```
