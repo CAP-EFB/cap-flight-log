@@ -16,7 +16,7 @@ The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes �
 - **Plan** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
   ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a), frequencies and nav aids.
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
-  Start and Shut Down), the flight log, observations with up to six photos each, and OPS checks with a
+  Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
 - **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
 - **Debrief** — flight times and totals, Hobbs and tach end/start/total with Hobbs split into In Area and

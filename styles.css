@@ -642,7 +642,9 @@ select.input {
 
 /* ---------- log entries ---------- */
 
-.entry-list { display: flex; flex-direction: column; }
+.entry-list, .timeline { display: flex; flex-direction: column; }
+.timeline .obs { margin: 8px 0; }
+.timeline .obs:last-child { margin-bottom: 0; }
 
 .entry-row {
   display: grid;
