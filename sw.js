@@ -1,5 +1,5 @@
 /* CAP Flight Log service worker — cache-first so the app works with no signal. */
-const CACHE = 'observer-log-v1.7.0';
+const CACHE = 'observer-log-v1.7.1';
 
 const ASSETS = [
   './',
@@ -13,7 +13,8 @@ const ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
-  './icons/emblem.png'
+  './icons/emblem.png',
+  './icons/logo.png'
 ];
 
 self.addEventListener('install', event => {

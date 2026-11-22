@@ -167,6 +167,11 @@ h1, h2, h3, p { margin: 0; }
   object-fit: contain;
 }
 
+/* the header logo: airplane and wordmark in one image */
+.brand-logo { display: block; width: auto; height: 46px; }
+.top-actions .brand-sub { margin: 0 6px 0 0; white-space: nowrap; }
+@media (max-width: 700px) { .top-actions .brand-sub { display: none; } }
+
 .brand-text { min-width: 0; }
 .brand-title {
   font-size: 15px;
@@ -208,40 +213,91 @@ h1, h2, h3, p { margin: 0; }
 .icon-btn:active { transform: scale(.96); }
 .icon-btn svg { width: 21px; height: 21px; }
 
+/* App name | mission number, callsign, crew — tap the mission part to edit it. */
+.brand { flex: none; }
+.brand-pipe {
+  flex: none;
+  width: 1px;
+  height: 30px;
+  background: rgba(255, 255, 255, .28);
+}
 .mission-strip {
-  max-width: 1020px;
-  margin: 0 auto;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px 10px;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 6px;
   border: 0;
-  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  border-radius: 0;
 }
 .mission-strip:active { background: var(--card-2); }
 .mission-strip-main {
-  font-size: 13.5px;
+  flex: none;
+  max-width: 45%;
+  font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
 }
 .mission-strip-sub {
-  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 48%;
 }
-.mission-strip svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+
+/* "Start Here" callout: a pill with an arrowhead pointing back at New Mission. */
+.mission-strip { align-items: center; }
+.start-here {
+  position: relative;
+  flex: none;
+  margin-left: 8px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  background: #f1bd6b;
+  color: #1c2632;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  animation: startHere 1.3s ease-in-out infinite;
+}
+.start-here[hidden] { display: none; }
+.start-here::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  margin-top: -7px;
+  border: 7px solid transparent;
+  border-right-color: #f1bd6b;
+}
+@keyframes startHere {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .start-here { animation: none; }
+}
+
+/* Narrow screens: the mission line drops under the app name. */
+@media (max-width: 700px) {
+  .topbar-row { flex-wrap: wrap; row-gap: 2px; }
+  .brand { flex: 1; }
+  .brand-pipe { display: none; }
+  .mission-strip { order: 3; flex-basis: 100%; padding-left: 0; }
+}
 
 /* ---------- layout ---------- */
 

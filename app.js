@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -966,18 +966,15 @@ function renderStrip() {
   const sub = $('#stripSub');
   if (!main || !sub) return;
 
-  const bits = [];
-  bits.push(log.mission ? log.mission : 'Untitled mission');
-  if (log.sortie) bits.push('Sortie ' + log.sortie);
-  if (log.aircraft) bits.push(log.aircraft);
-  main.textContent = bits.join('  ·  ');
-
-  const crew = [];
-  if (log.crew.pilot) crew.push('P ' + log.crew.pilot);
-  if (log.crew.observer) crew.push('O ' + log.crew.observer);
-  if (log.crew.ap) crew.push('AP ' + log.crew.ap);
-  if (log.crew.scanner) crew.push('S ' + log.crew.scanner);
-  sub.textContent = crew.length ? crew.join('  ·  ') : 'Tap to add mission, crew & entry point';
+  // Header reads: mission number, then callsign and crew names.
+  main.textContent = log.mission || 'New Mission';
+  // Until the mission has a number, an arrow points at it: that is where to begin.
+  const callout = $('#stripCallout');
+  if (callout) callout.hidden = !!log.mission;
+  const rest = [log.callsign, log.crew.pilot, log.crew.observer, log.crew.ap, log.crew.scanner]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  sub.textContent = rest.join('  ·  ');
 }
 
 function renderTabbar() {
@@ -2593,7 +2590,7 @@ function deleteEntry(entryId) {
 function menuSheet() {
   const log = activeLog();
   const logRows = state.logs.map(l => `<button type="button" class="log-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
-    <span class="log-name">${esc(l.mission || 'Untitled mission')}</span>
+    <span class="log-name">${esc(l.mission || 'New Mission')}</span>
     <span class="log-meta">Sortie ${esc(l.sortie || '—')} · ${esc(l.aircraft || 'no tail')} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}</span>
   </button>`).join('');
 
@@ -2930,7 +2927,7 @@ function duplicateLog() {
 }
 
 function deleteLog() {
-  if (!confirm('Delete “' + (activeLog().mission || 'Untitled mission') + '” and all of its entries? This cannot be undone.')) return;
+  if (!confirm('Delete “' + (activeLog().mission || 'New Mission') + '” and all of its entries? This cannot be undone.')) return;
   const index = state.logs.findIndex(l => l.id === state.activeId);
   state.logs.splice(index, 1);
   if (!state.logs.length) state.logs.push(blankLog());
