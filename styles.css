@@ -1675,3 +1675,6 @@ body.keyboard-open .fab { display: none; }
 .mission-row { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; }
 .mission-row .log-name, .mission-row .log-meta { grid-column: 1; }
 .mission-row .row-chevron { grid-column: 2; grid-row: 1 / span 2; width: 18px; height: 18px; color: var(--muted); }
+
+.active-mission-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 10px; }
+.active-mission-number { font-size: 24px; font-weight: 750; letter-spacing: .01em; }

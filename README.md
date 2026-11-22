@@ -10,9 +10,10 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 The tabs follow a sortie from briefing to signature: **Missions → Sorties → Fly → Notes → Debrief → Sign**.
 
-- **Missions** — the first tab: every mission on this iPad, with totals (sorties, Hobbs, tracked
-  distance). The + button adds a mission from WMIRS (number required; date and base optional) and
-  opens Sorties with the form for its first sortie. Tapping a mission opens it on Sorties.
+- **Missions** — the first tab: the active mission at the top, with its sorties and a button to add
+  one (which opens Sorties with the new-sortie form), then the previous missions and totals (sorties,
+  Hobbs, tracked distance). Tapping a previous mission makes it the active one. The + button adds a
+  mission from WMIRS (number required; date and base optional).
 - **Missions and sorties** — a mission holds one or more sorties. On Sorties, the + button (or the
   header's sortie switcher, or Menu → + Sortie) starts the next sortie with the same crew, aircraft,
   frequencies and search area; mission number, base, mission date and your name and CAPID are shared

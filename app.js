@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.20.1';
+const APP_VERSION = '1.21.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2031,41 +2031,65 @@ function showScreen(screen) {
    The first tab: every mission on this iPad with its sorties, newest first,
    and where a new mission (from WMIRS) or sortie is added. */
 function logbookView() {
+  const active = activeLog();
   const ids = missionIdsInOrder().filter(id => state.logs.some(l => l.missionId === id && l.missionCreated));
+  const previous = ids.filter(id => id !== (active.missionCreated ? active.missionId : null));
   const sorties = state.logs.filter(l => l.started);
   const hobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
   const nm = sorties.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
-  const rows = ids.map(id => {
+  const rows = previous.map(id => {
     const all = state.logs.filter(l => l.missionId === id);
     const first = all[0];
     const flown = all.filter(l => l.started);
     const missionHobbs = flown.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
-    const current = id === activeLog().missionId;
     const meta = [first.sar.missionDate, first.base,
       flown.length + ' sortie' + (flown.length === 1 ? '' : 's'),
       missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
-    return `<button type="button" class="log-row mission-row ${current ? 'active' : ''}" data-act="open-mission" data-id="${esc(id)}">
+    return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(id)}">
       <span class="log-name">${esc(first.mission)}</span>
       <span class="log-meta">${esc(meta)}</span>
       <svg class="row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>`;
   }).join('');
   return `<div class="stack">
+    ${activeMissionHTML(active)}
     <section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>Missions</h2><span class="count-badge">${ids.length}</span></div>
+        <div class="head-left"><h2>${active.missionCreated ? 'Previous missions' : 'Missions'}</h2><span class="count-badge">${previous.length}</span></div>
       </div>
-      <div class="totals" style="grid-template-columns:repeat(3,1fr);margin-top:0;padding-top:0;border-top:0">
+      ${rows ? `<div class="log-list">${rows}</div>`
+        : `<div class="empty"><strong>${active.missionCreated ? 'No other missions' : 'No missions yet'}</strong>Tap + to add a mission from WMIRS.</div>`}
+      <div class="totals" style="grid-template-columns:repeat(3,1fr)">
         <div class="total"><div class="tl">Sorties</div><div class="tv">${sorties.length}</div></div>
         <div class="total"><div class="tl">Hobbs</div><div class="tv">${fmtDecimal(hobbs, 1) || '0.0'}</div></div>
         <div class="total"><div class="tl">Tracked</div><div class="tv">${Math.round(nm)} NM</div></div>
       </div>
-      ${rows ? `<div class="log-list" style="margin-top:12px">${rows}</div>`
-        : '<div class="empty" style="margin-top:12px"><strong>No missions yet</strong>Tap + to add a mission from WMIRS.</div>'}
       <div class="sheet-note">Missions are created in WMIRS. Add one here with its mission number, then add each sortie you fly on it. Everything stays on this iPad.</div>
     </section>
   </div>
   ${fabHTML('new-mission', 'Add a mission')}`;
+}
+
+// The mission being flown, at the top of Missions: its sorties and the way to add one.
+function activeMissionHTML(log) {
+  if (!log.missionCreated) return '';
+  const flown = missionSorties(log).filter(l => l.started);
+  const meta = [log.sar.missionDate, log.base].filter(Boolean).join(' · ');
+  return `<section class="card card-current active-mission">
+    <div class="card-head">
+      <div class="head-left"><h2>Active mission</h2></div>
+      <button class="btn small" data-act="edit-mission">Mission details</button>
+    </div>
+    <div class="active-mission-title">
+      <span class="active-mission-number">${esc(log.mission)}</span>
+      ${meta ? `<span class="muted">${esc(meta)}</span>` : ''}
+    </div>
+    ${flown.length ? `<div class="log-list">${flown.map(sortieCardRowHTML).join('')}</div>`
+      : '<p class="sheet-note" style="margin-top:4px">No sorties yet. A sortie is one flight of this mission.</p>'}
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn primary" data-act="start-sortie">${flown.length ? '+ Next sortie' : '+ Add the first sortie'}</button>
+    </div>
+  </section>`;
 }
 
 // The round add button in the bottom corner: a mission on Missions, a sortie on Sorties.
@@ -2122,13 +2146,11 @@ function saveNewMission() {
   log.sortie = log.sortie || '1';
   state.activeId = log.id;
   closeSheet();
-  activeTab = 'plan';
+  activeTab = 'logbook';
   save();
   render();
   window.scrollTo(0, 0);
-  toast('Mission ' + value + ' added · now its first sortie');
-  const first = $('#new-sortie-card [data-bind="aircraft"]');
-  if (first) setTimeout(() => first.focus(), 60);
+  toast('Mission ' + value + ' added · now add its first sortie');
 }
 
 function sortieCardRowHTML(l, index) {
@@ -5297,7 +5319,16 @@ const actions = {
     if (!sorties.length) return;
     state.activeId = sorties[sorties.length - 1].id;
     save();
+    switchTab('logbook');
+  },
+  // From the active mission: the first sortie's form on Sorties, or the next sortie
+  'start-sortie': () => {
+    if (missionSorties().some(l => l.started)) { addSortie(); return; }
     switchTab('plan');
+    const card = $('#new-sortie-card');
+    if (card) card.scrollIntoView({ block: 'start' });
+    const tail = $('#new-sortie-card [data-bind="aircraft"]');
+    if (tail) setTimeout(() => tail.focus(), 60);
   },
   'del-mission': () => deleteMission(),
   'new-mission': () => openNewMissionSheet(),
