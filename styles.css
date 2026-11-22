@@ -1227,7 +1227,8 @@ a.menu-item { text-decoration: none; }
 .sortie-switch[hidden] { display: none; }
 .card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
 /* sortie tabs stay shut until the mission has a sortie */
-.tabbar.locked .tab:not([data-tab="plan"]) { opacity: .38; }
+.tabbar.locked .tab:not([data-tab="plan"]):not([data-tab="logbook"]) { opacity: .38; }
+.logbook-mission.current { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
 
 .back-link {
   align-self: flex-start;

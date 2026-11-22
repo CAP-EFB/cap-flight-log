@@ -8,8 +8,10 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 ## What it does
 
-The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes → Debrief → Sign**.
+The tabs follow a sortie from briefing to signature: **Logbook → Plan → Fly → Notes → Debrief → Sign**.
 
+- **Logbook** — the first tab: every mission and its sorties, with totals (missions, sorties, Hobbs,
+  tracked distance). Add a mission (from WMIRS) or a sortie from here.
 - **Missions and sorties** — a mission holds one or more sorties. A new mission is set up in two steps at
   the top of the Plan tab: add the mission from WMIRS (number required), then add its first sortie; the other
   tabs open after that. The logo opens the list of all missions. The header's sortie switcher (or
