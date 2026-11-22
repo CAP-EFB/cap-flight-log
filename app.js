@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.9.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -728,6 +728,7 @@ function sarReport(log) {
 function blankLog() {
   return {
     id: uid(),
+    missionId: uid(),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     mission: '',
@@ -786,6 +787,7 @@ function normalizeLog(raw) {
   const base = blankLog();
   const log = Object.assign(base, raw || {});
   log.id = (raw && raw.id) || base.id;
+  log.missionId = (raw && raw.missionId) || '';   // filled in by assignMissionIds
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
   TIME_DEFS.forEach(def => {
     log.times[def.key] = Object.assign({ time: '', hobbs: '' }, log.times[def.key] || {});
@@ -837,6 +839,7 @@ function normalizeState(raw) {
     settings: Object.assign(fresh.settings, raw.settings || {}),
     logs: raw.logs.map(normalizeLog)
   };
+  assignMissionIds(normalized.logs);
   // Finger became the sketch default in 1.3.8. State saved before that carries
   // the old Pencil default, indistinguishable from a choice, so switch it once.
   if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
@@ -1139,6 +1142,12 @@ function renderStrip() {
   // Until the mission has a number, an arrow points at it: that is where to begin.
   const callout = $('#stripCallout');
   if (callout) callout.hidden = !!log.mission;
+  const sortieBtn = $('#sortieSwitch');
+  if (sortieBtn) {
+    const sorties = missionSorties(log);
+    $('#sortieLabel').textContent = sortieLabel(log, sorties.indexOf(log)) +
+      (sorties.length > 1 ? ' of ' + sorties.length : '');
+  }
   const rest = [log.callsign, log.crew.pilot, log.crew.observer, log.crew.ap, log.crew.scanner]
     .map(value => String(value || '').trim())
     .filter(Boolean);
@@ -1591,6 +1600,31 @@ function sarView(log) {
           ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
           ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
         </div>`).join('')}
+        <div class="subhead">Entry point</div>
+        <div class="form-grid">
+          ${coordField('Latitude', 'entry.lat', log.entry.lat, true)}
+          ${coordField('Longitude', 'entry.lon', log.entry.lon, false)}
+        </div>
+        <div class="gps-row">
+          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="entry">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+            Use current position
+          </button>
+          <button type="button" class="mini" data-act="copy-entry">Copy to exit</button>
+          <span class="gps-status" id="gps-mission-entry-status"></span>
+        </div>
+        <div class="subhead">Exit point</div>
+        <div class="form-grid">
+          ${coordField('Latitude', 'exit.lat', log.exit.lat, true)}
+          ${coordField('Longitude', 'exit.lon', log.exit.lon, false)}
+        </div>
+        <div class="gps-row">
+          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="exit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+            Use current position
+          </button>
+          <span class="gps-status" id="gps-mission-exit-status"></span>
+        </div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn small" data-act="sar-clear-corners">Clear corners</button>
       </div>
@@ -2467,7 +2501,7 @@ function missionSheet() {
   const radio = log.radio;
   openSheet({
     title: 'Mission details',
-    sub: 'These carry onto the printed log',
+    sub: 'Mission number and base are shared by every sortie; the rest is this sortie only',
     body: `
       <div class="sheet-section">
         <h3>Mission</h3>
@@ -2488,31 +2522,6 @@ function missionSheet() {
           ${field('Grid', textInput('grid', log.grid, { placeholder: '17S' }))}
           ${field('Altitude', textInput('altitude', log.altitude, { placeholder: '3500' }))}
           ${field('Airspeed', textInput('airspeed', log.airspeed, { placeholder: '110' }))}
-        </div>
-        <div class="subhead">Entry point</div>
-        <div class="form-grid">
-          ${coordField('Latitude N', 'entry.lat', log.entry.lat, true)}
-          ${coordField('Longitude W', 'entry.lon', log.entry.lon, false)}
-        </div>
-        <div class="gps-row">
-          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="entry">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-            Use current position
-          </button>
-          <button type="button" class="mini" data-act="copy-entry">Copy to exit</button>
-          <span class="gps-status" id="gps-mission-entry-status"></span>
-        </div>
-        <div class="subhead">Exit point</div>
-        <div class="form-grid">
-          ${coordField('Latitude N', 'exit.lat', log.exit.lat, true)}
-          ${coordField('Longitude W', 'exit.lon', log.exit.lon, false)}
-        </div>
-        <div class="gps-row">
-          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="exit">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-            Use current position
-          </button>
-          <span class="gps-status" id="gps-mission-exit-status"></span>
         </div>
       </div>
 
@@ -2854,21 +2863,27 @@ function deleteEntry(entryId) {
 
 function menuSheet() {
   const log = activeLog();
-  const logRows = state.logs.map(l => `<button type="button" class="log-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
-    <span class="log-name">${esc(l.mission || 'New Mission')}</span>
-    <span class="log-meta">Sortie ${esc(l.sortie || '—')} · ${esc(l.aircraft || 'no tail')} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}</span>
-  </button>`).join('');
+  // missions in the order they were started, each with its sorties
+  const missionIds = [];
+  state.logs.forEach(l => { if (!missionIds.includes(l.missionId)) missionIds.push(l.missionId); });
+  const logRows = missionIds.map(id => {
+    const sorties = state.logs.filter(l => l.missionId === id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+    return `<div class="mission-group ${id === log.missionId ? 'active' : ''}">
+      <div class="mission-group-name">${esc(sorties[0].mission || 'New Mission')}</div>
+      ${sorties.map(sortieRowHTML).join('')}
+    </div>`;
+  }).join('');
 
   openSheet({
     title: 'Logs & data',
     body: `
       <div class="sheet-section">
-        <h3>Mission logs</h3>
+        <h3>Missions</h3>
         <div class="log-list">${logRows}</div>
         <div class="btn-row">
-          <button type="button" class="btn small" data-act="new-log">+ New log</button>
-          <button type="button" class="btn small" data-act="dup-log">Duplicate</button>
-          <button type="button" class="btn small danger" data-act="del-log">Delete</button>
+          <button type="button" class="btn small" data-act="new-log">+ New mission</button>
+          <button type="button" class="btn small" data-act="add-sortie">+ Sortie</button>
+          <button type="button" class="btn small danger" data-act="del-log">Delete sortie</button>
         </div>
       </div>
 
@@ -3166,6 +3181,61 @@ function switchLog(id) {
   window.scrollTo(0, 0);
 }
 
+/* ---------- missions and sorties ----------
+   Each log is one sortie. Sorties that share a missionId belong to one mission,
+   and the mission-level fields below are kept the same on all of them. */
+
+const MISSION_FIELDS = ['mission', 'base', 'sar.missionDate', 'signoff.name', 'signoff.capid'];
+
+function missionSorties(log) {
+  const l = log || activeLog();
+  return state.logs
+    .filter(other => other.missionId === l.missionId)
+    .sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+}
+
+function getPath(obj, path) {
+  return path.split('.').reduce((value, key) => (value == null ? value : value[key]), obj);
+}
+
+// Copy a mission-level field from one sortie to the rest of its mission.
+function syncMissionField(log, path) {
+  if (!MISSION_FIELDS.includes(path)) return;
+  const value = getPath(log, path);
+  missionSorties(log).forEach(other => { if (other !== log) setPath(other, path, value); });
+}
+
+// Logs saved before 1.9.0 have no missionId: those with the same mission number
+// become sorties of one mission, the rest become one-sortie missions.
+function assignMissionIds(logs) {
+  const byNumber = {};
+  logs.forEach(log => {
+    if (log.missionId) {
+      const key = String(log.mission || '').trim().toUpperCase();
+      if (key && !byNumber[key]) byNumber[key] = log.missionId;
+    }
+  });
+  logs.forEach(log => {
+    if (log.missionId) return;
+    const key = String(log.mission || '').trim().toUpperCase();
+    if (key && byNumber[key]) {
+      log.missionId = byNumber[key];
+    } else {
+      log.missionId = uid();
+      if (key) byNumber[key] = log.missionId;
+    }
+  });
+}
+
+function sortieLabel(log, index) {
+  return 'Sortie ' + (String(log.sortie || '').trim() || String(index + 1));
+}
+
+function nextSortieNumber(sorties) {
+  const numbers = sorties.map(l => parseInt(l.sortie, 10)).filter(Number.isFinite);
+  return numbers.length ? String(Math.max(...numbers) + 1) : '';
+}
+
 function createLog() {
   const log = blankLog();
   state.logs.push(log);
@@ -3174,39 +3244,83 @@ function createLog() {
   activeTab = 'log';
   save();
   render();
-  toast('New log created');
+  toast('New mission started');
 }
 
-function duplicateLog() {
+// The next sortie of this mission: same crew, aircraft, frequencies and search
+// area; times, Hobbs, entries, observations and results start empty.
+function addSortie() {
   const source = activeLog();
-  const copy = normalizeLog(deepClone(source));
-  copy.id = uid();
-  copy.createdAt = Date.now();
-  copy.updatedAt = Date.now();
-  copy.mission = (copy.mission ? copy.mission + ' copy' : 'Untitled copy');
-  copy.entries.forEach(e => { e.id = uid(); });
-  copy.ops.forEach(o => { o.id = uid(); });
-  copy.observations.forEach(o => { o.id = uid(); });
-  state.logs.push(copy);
-  state.activeId = copy.id;
+  const sorties = missionSorties(source);
+  const log = blankLog();
+  log.missionId = source.missionId;
+  ['mission', 'base', 'capFlight', 'aircraft', 'callsign', 'sectional', 'grid', 'altitude', 'airspeed']
+    .forEach(key => { log[key] = source[key]; });
+  log.crew = deepClone(source.crew);
+  log.radio = deepClone(source.radio);
+  log.navAids = deepClone(source.navAids);
+  log.entry = deepClone(source.entry);
+  log.exit = deepClone(source.exit);
+  ['missionDate', 'reporter', 'reporterCapid', 'areaName'].forEach(key => { log.sar[key] = source.sar[key]; });
+  log.sar.corners = deepClone(source.sar.corners);
+  log.signoff.name = source.signoff.name;
+  log.signoff.capid = source.signoff.capid;
+  log.sortie = nextSortieNumber(sorties);
+  state.logs.push(log);
+  state.activeId = log.id;
   closeSheet();
   activeTab = 'log';
   save();
   render();
-  toast('Log duplicated');
+  window.scrollTo(0, 0);
+  toast(sortieLabel(log, sorties.length) + ' started · crew, aircraft and search area copied');
 }
 
 function deleteLog() {
-  if (!confirm('Delete “' + (activeLog().mission || 'New Mission') + '” and all of its entries? This cannot be undone.')) return;
-  const index = state.logs.findIndex(l => l.id === state.activeId);
-  state.logs.splice(index, 1);
+  const log = activeLog();
+  const sorties = missionSorties(log);
+  const index = sorties.indexOf(log);
+  const what = sorties.length > 1
+    ? sortieLabel(log, index) + ' of ' + (log.mission || 'this mission')
+    : '“' + (log.mission || 'New Mission') + '”';
+  if (!confirm('Delete ' + what + ' and all of its entries? This cannot be undone.')) return;
+  state.logs.splice(state.logs.indexOf(log), 1);
   if (!state.logs.length) state.logs.push(blankLog());
-  state.activeId = state.logs[0].id;
+  const sibling = sorties.find(other => other !== log);
+  state.activeId = (sibling || state.logs[0]).id;
   closeSheet();
   activeTab = 'log';
   save();
   render();
-  toast('Log deleted');
+  toast(sorties.length > 1 ? 'Sortie deleted' : 'Mission deleted');
+}
+
+function sortieRowHTML(l, index) {
+  const start = l.times.engineStart.time ? fmtZ(l.times.engineStart.time) : 'not started';
+  return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
+    <span class="log-name">${esc(sortieLabel(l, index))}</span>
+    <span class="log-meta">${esc(l.aircraft || 'no tail')} · ${esc(start)} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}</span>
+  </button>`;
+}
+
+// Header switcher: the sorties of this mission, and + Sortie.
+function sortieSheet() {
+  const log = activeLog();
+  const sorties = missionSorties(log);
+  openSheet({
+    title: 'Sorties',
+    sub: (log.mission || 'New Mission') + ' · ' + sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
+    body: `
+      <div class="log-list">${sorties.map(sortieRowHTML).join('')}</div>
+      <div class="sheet-note">
+        + Sortie starts the next sortie of this mission with the same crew, aircraft, frequencies and search
+        area. The mission number, base, mission date and your name and CAPID are shared by every sortie.
+      </div>
+    `,
+    footer: `<button type="button" class="btn danger left" data-act="del-log">Delete this sortie</button>
+      <button type="button" class="btn" data-close>Done</button>
+      <button type="button" class="btn primary" data-act="add-sortie">+ Sortie</button>`
+  });
 }
 
 function slug(value) {
@@ -3314,6 +3428,12 @@ function importJSON() {
       let added = 0;
       incoming.forEach(raw => {
         const log = normalizeLog(raw);
+        if (!log.missionId) {
+          // an old backup: join a mission here with the same number, if there is one
+          const key = String(log.mission || '').trim().toUpperCase();
+          const match = key && state.logs.find(l => String(l.mission || '').trim().toUpperCase() === key);
+          log.missionId = match ? match.missionId : uid();
+        }
         const index = state.logs.findIndex(l => l.id === log.id);
         if (index >= 0) {
           state.logs[index] = log;
@@ -4287,8 +4407,8 @@ const actions = {
   },
   'copy-entry': () => {
     const log = activeLog();
-    const latInput = $('#overlay [data-bind="exit.lat"]');
-    const lonInput = $('#overlay [data-bind="exit.lon"]');
+    const latInput = $('[data-bind="exit.lat"]');
+    const lonInput = $('[data-bind="exit.lon"]');
     if (latInput) {
       latInput.value = log.entry.lat;
       latInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -4332,8 +4452,8 @@ const actions = {
   },
   'gps-mission': async el => {
     const target = el.dataset.target === 'exit' ? 'exit' : 'entry';
-    const latInput = $('#overlay [data-bind="' + target + '.lat"]');
-    const lonInput = $('#overlay [data-bind="' + target + '.lon"]');
+    const latInput = $('[data-bind="' + target + '.lat"]');
+    const lonInput = $('[data-bind="' + target + '.lon"]');
     const status = $('#gps-mission-' + target + '-status');
     const done = gpsBusy(el);
     try {
@@ -4418,7 +4538,8 @@ const actions = {
   },
   'switch-log': el => switchLog(el.dataset.id),
   'new-log': () => createLog(),
-  'dup-log': () => duplicateLog(),
+  'add-sortie': () => addSortie(),
+  'sortie-menu': () => sortieSheet(),
   'del-log': () => deleteLog(),
   'menu': () => menuSheet(),
   'settings': () => settingsSheet(),
@@ -4496,6 +4617,7 @@ const actions = {
     const now = new Date();
     const value = pad2(now.getDate()) + ' ' + MONTHS[now.getMonth()] + ' ' + String(now.getFullYear()).slice(-2);
     activeLog().sar.missionDate = value;
+    syncMissionField(activeLog(), 'sar.missionDate');
     const input = $('[data-bind="sar.missionDate"]');
     if (input) input.value = value;
     save();
@@ -4590,7 +4712,10 @@ document.addEventListener('input', event => {
   }
 
   if (path.startsWith('settings.')) setPath(state, path, el.value);
-  else setPath(activeLog(), path, el.value);
+  else {
+    setPath(activeLog(), path, el.value);
+    syncMissionField(activeLog(), path);
+  }
 
   if (el.matches('[data-coord]')) updateCoordHelp(el);
   if (/^(mission|sortie|aircraft|callsign|crew\.)/.test(path)) renderStrip();
