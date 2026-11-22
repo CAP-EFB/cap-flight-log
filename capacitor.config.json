@@ -1,0 +1,9 @@
+{
+  "appId": "io.github.capefb.missionlog",
+  "appName": "Mission Log",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#1c2632"
+  }
+}

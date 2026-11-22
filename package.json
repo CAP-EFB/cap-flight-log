@@ -1,0 +1,22 @@
+{
+  "name": "cap-mission-log",
+  "version": "1.12.0",
+  "private": true,
+  "description": "Mission Log: offline CAP observer log for iPad, as a web app and a Capacitor iOS app.",
+  "scripts": {
+    "build:web": "sh scripts/build-web.sh",
+    "sync": "sh scripts/build-web.sh && cap sync ios",
+    "open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/geolocation": "8.2.4",
+    "@capacitor/ios": "8.6.0",
+    "@capacitor/share": "8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  }
+}

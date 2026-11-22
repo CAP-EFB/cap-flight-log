@@ -321,6 +321,56 @@ function coordPair(latRaw, lonRaw) {
 
 /* ---------- GPS ---------- */
 
+/* ---------- native shell ----------
+   In the iPad app (Capacitor) GPS, sharing and files go through native plugins;
+   in a browser the same calls fall back to the web APIs. */
+const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+const Native = NATIVE ? {
+  Geolocation: window.Capacitor.registerPlugin('Geolocation'),
+  Share: window.Capacitor.registerPlugin('Share'),
+  Filesystem: window.Capacitor.registerPlugin('Filesystem')
+} : null;
+
+function geoAvailable() {
+  return NATIVE || (!!navigator.geolocation && window.isSecureContext);
+}
+
+// Plugin errors are messages; turn them into the web API's error codes.
+function nativeGeoError(err) {
+  const message = String((err && (err.message || err.code)) || err || '');
+  return { code: /denied|permission|not authori/i.test(message) ? 1 : /time ?out/i.test(message) ? 3 : 2, message };
+}
+
+const geo = {
+  getCurrentPosition(ok, fail, options) {
+    if (!NATIVE) return navigator.geolocation.getCurrentPosition(ok, fail, options);
+    Native.Geolocation.getCurrentPosition(options).then(ok, err => fail(nativeGeoError(err)));
+    return undefined;
+  },
+  // Returns an id for clearWatch (a promise of one in the app).
+  watchPosition(ok, fail, options) {
+    if (!NATIVE) return navigator.geolocation.watchPosition(ok, fail, options);
+    return Native.Geolocation.watchPosition(options, (position, err) => {
+      if (err) fail(nativeGeoError(err));
+      else if (position) ok(position);
+    });
+  },
+  clearWatch(id) {
+    if (!NATIVE) return navigator.geolocation.clearWatch(id);
+    Promise.resolve(id).then(callbackId => Native.Geolocation.clearWatch({ id: callbackId })).catch(() => {});
+    return undefined;
+  }
+};
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 let lastGpsFix = null;
 let gpsWarned = false;
 
@@ -338,15 +388,15 @@ function requestGps(force) {
     return Promise.resolve(lastGpsFix);
   }
   return new Promise((resolve, reject) => {
-    if (!window.isSecureContext) {
+    if (!NATIVE && !window.isSecureContext) {
       reject({ code: 2, secure: true });
       return;
     }
-    if (!navigator.geolocation) {
+    if (!geoAvailable()) {
       reject({ code: 2, unsupported: true });
       return;
     }
-    navigator.geolocation.getCurrentPosition(
+    geo.getCurrentPosition(
       position => {
         const fix = {
           lat: position.coords.latitude,
@@ -380,14 +430,14 @@ function freshFix() {
 
 function startGpsWatch() {
   if (gpsWatchId != null) return;
-  if (!navigator.geolocation || !window.isSecureContext) {
+  if (!geoAvailable()) {
     gpsState = 'unavailable';
     renderGpsChip();
     return;
   }
   gpsState = 'searching';
   renderGpsChip();
-  gpsWatchId = navigator.geolocation.watchPosition(
+  gpsWatchId = geo.watchPosition(
     position => {
       lastGpsFix = {
         lat: position.coords.latitude,
@@ -413,7 +463,7 @@ function startGpsWatch() {
 }
 
 function stopGpsWatch() {
-  if (gpsWatchId != null && navigator.geolocation) navigator.geolocation.clearWatch(gpsWatchId);
+  if (gpsWatchId != null && geoAvailable()) geo.clearWatch(gpsWatchId);
   gpsWatchId = null;
   gpsState = 'off';
   renderGpsChip();
@@ -524,7 +574,9 @@ function gpsErrorText(error) {
   if (error && error.unsupported) return 'This browser does not support location.';
   const code = error && error.code;
   if (code === 1) {
-    return 'Location permission denied. Turn on Location Services for Safari or Mission Log in iPad Settings.';
+    return NATIVE
+      ? 'Location permission denied. Allow it in iPad Settings → Mission Log → Location.'
+      : 'Location permission denied. Turn on Location Services for Safari or Mission Log in iPad Settings.';
   }
   if (code === 3) return 'GPS timed out. Move into the open and try again.';
   if (code === 2) return 'Location unavailable. Check that Location Services is on, then try again.';
@@ -1397,7 +1449,7 @@ window.addEventListener('appinstalled', () => {
 const SHARE_ICON = '<svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Share"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
 
 function installBannerHTML() {
-  if (isStandaloneApp() || state.settings.installDismissed) return '';
+  if (NATIVE || isStandaloneApp() || state.settings.installDismissed) return '';
   const ios = isIOSDevice();
   if (!ios && !installPromptEvent) return '';   // nothing useful to offer here
   const how = ios
@@ -2993,7 +3045,7 @@ function menuSheet() {
 function settingsSheet() {
   const settings = state.settings;
   const wakeSupported = 'wakeLock' in navigator;
-  const gpsSupported = ('geolocation' in navigator) && window.isSecureContext;
+  const gpsSupported = geoAvailable();
 
   openSheet({
     title: 'Settings',
@@ -3058,7 +3110,7 @@ function helpSheet() {
   openSheet({
     title: 'Help & install',
     body: `
-      <div class="sheet-section">
+      ${NATIVE ? '' : `      <div class="sheet-section">
         <h3>Put it on the home screen</h3>
         <p class="sheet-note" style="margin-top:0">
           Open this page in <strong>Safari</strong> on the iPad, tap the Share button, then
@@ -3069,7 +3121,7 @@ function helpSheet() {
           The first load needs a connection so Safari can cache the app. After that, everything —
           including the sketch pad — runs offline.
         </p>
-      </div>
+      </div>`}
 
       <div class="sheet-section">
         <h3>In the air</h3>
@@ -3393,6 +3445,21 @@ function exportName(extension) {
 }
 
 async function shareFile(filename, blob) {
+  if (NATIVE) {
+    // The app's web view has no Web Share or downloads: write the file to the
+    // app's cache folder and hand it to the iPad share sheet.
+    try {
+      const data = await blobToBase64(blob);
+      const written = await Native.Filesystem.writeFile({ path: filename, data, directory: 'CACHE' });
+      await Native.Share.share({ title: filename, files: [written.uri] });
+      return true;
+    } catch (err) {
+      if (/cancel/i.test(String((err && err.message) || err))) return false;
+      console.warn('native share failed', err);
+      toast('Could not open the share sheet');
+      return false;
+    }
+  }
   try {
     if (navigator.canShare && typeof File === 'function') {
       const file = new File([blob], filename, { type: blob.type });
@@ -5212,7 +5279,8 @@ async function boot() {
   if (state.settings.gpsLive) startGpsWatch(); else renderGpsChip();
   setInterval(renderGpsChip, 5000);   // a fix that stops arriving turns to GPS lost
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  // The iPad app ships its files inside the app, so it has no service worker.
+  if (!NATIVE && 'serviceWorker' in navigator && location.protocol !== 'file:') {
     // A controller at load means this is an update, not the first install.
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.addEventListener('controllerchange', () => {

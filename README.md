@@ -95,6 +95,26 @@ etc.) — plain `http://192.168.x.x` will not register the service worker or all
 | `manifest.webmanifest` | Home-screen metadata |
 | `icons/` | App icons and the header emblem |
 
+## iPad app (Capacitor)
+
+The same web code also ships as a native iPad app built with [Capacitor](https://capacitorjs.com).
+The Xcode project is in `ios/`; the web files are copied into it, so the app works offline without a
+service worker. Inside the app, GPS, the share sheet and files go through native plugins
+(`@capacitor/geolocation`, `@capacitor/share`, `@capacitor/filesystem`); in a browser the same code
+uses the web APIs.
+
+Needs Xcode (from the Mac App Store) and Node.
+
+```sh
+npm install          # Capacitor and its plugins, pinned versions
+npm run sync         # copy the web files into www/ and update the Xcode project
+npm run open         # open ios/App in Xcode, then build and run on a simulator or iPad
+```
+
+Run `npm run sync` after every change to `index.html`, `app.js`, `styles.css`, `icons/` or `vendor/`.
+App ID: `io.github.capefb.missionlog`. Location, camera and photo permission texts are in
+`ios/App/App/Info.plist`.
+
 ## Deployment
 
 `main` holds the source. The live site is served from the **`gh-pages`** branch root
