@@ -30,6 +30,9 @@ two-page mission log to PDF (long logs can add a continuation page).
 - **Sign-off** — its own Sign tab: printed name, CAPID, UTC date/time and a signature pad.
 - **Output** — Print / Save PDF. On iPad this builds a PDF and opens the share sheet (Save to Files or
   Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
+- **Disclaimer & terms** — shown on first use and must be accepted to continue; available afterwards
+  from the menu.
+- **Feedback** — Menu → Send feedback opens an email to the developer.
 - **Offline** — a service worker caches the whole app. After the first load it works with no
   signal. Data never leaves the iPad unless you export it.
 
@@ -116,8 +119,7 @@ installed copies pick up the new files. The `deploy-pages.sh` script also copies
 
 This is a personal mission-log tool, not an official Civil Air Patrol product. It is not affiliated
 with or endorsed by Civil Air Patrol, Inc. CAP names and emblems are trademarks of Civil Air Patrol,
-Inc. The app icon incorporates the CAP propeller-and-triangle emblem, which remains the property of
-Civil Air Patrol, Inc. and is used here to identify a tool made by a member for CAP mission work.
+Inc.; this app uses its own airplane icon, not the CAP emblem.
 
 PDF generation uses [jsPDF](https://github.com/parallax/jsPDF) and
 [jsPDF-AutoTable](https://github.com/simonbengtsson/jsPDF-AutoTable), both MIT licensed.
