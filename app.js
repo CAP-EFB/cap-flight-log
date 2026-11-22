@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.11.1';
+const APP_VERSION = '1.12.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -590,8 +590,7 @@ function autoGpsEntry(entry) {
 function autoGpsObservation(obs) {
   requestGps(false)
     .then(fix => {
-      const index = activeLog().observations.indexOf(obs);
-      const card = activeTab === 'fly' ? $$('.obs')[index] : null;
+      const card = activeTab === 'fly' ? $('.obs[data-obs-id="' + obs.id + '"]') : null;
       applyGpsToObservation(obs, fix, card || null);
       save();
     })
@@ -860,7 +859,7 @@ function normalizeLog(raw) {
   }, o || {})) : [];
   log.observations = Array.isArray(log.observations) ? log.observations.map(o => {
     const merged = Object.assign({
-      id: uid(), time: '', hobbs: '', lat: '', lon: '', text: '', gpsAccuracy: null, gpsTime: ''
+      id: uid(), time: '', hobbs: '', lat: '', lon: '', text: '', gpsAccuracy: null, gpsTime: '', createdAt: 0
     }, o || {});
     merged.photos = Array.isArray(merged.photos)
       ? merged.photos
@@ -1295,21 +1294,15 @@ function quickButton(log, item) {
   </button>`;
 }
 
-function entriesHTML(log) {
-  if (!log.entries.length) {
-    return `<div class="empty"><strong>No log entries yet</strong>Checkpoints you tap above appear here.</div>`;
-  }
-  let previous = null;
-  const rows = log.entries.map(entry => {
-    const delta = previous && previous.time && entry.time ? diffMin(previous.time, entry.time) : null;
-    previous = entry;
-    const pos = fmtEntryPosition(entry);
-    const bits = [];
-    if (entry.hobbs) bits.push('Hobbs ' + esc(entry.hobbs));
-    if (pos) bits.push(esc(pos));
-    if (entry.gpsAccuracy) bits.push('GPS ±' + esc(entry.gpsAccuracy) + ' m');
-    if (delta != null && delta > 0) bits.push('<span class="entry-delta">+' + delta + 'm</span>');
-    return `<div class="entry-row" data-act="edit-entry" data-id="${esc(entry.id)}" role="button" tabindex="0">
+function entryRowHTML(entry, previous) {
+  const delta = previous && previous.time && entry.time ? diffMin(previous.time, entry.time) : null;
+  const pos = fmtEntryPosition(entry);
+  const bits = [];
+  if (entry.hobbs) bits.push('Hobbs ' + esc(entry.hobbs));
+  if (pos) bits.push(esc(pos));
+  if (entry.gpsAccuracy) bits.push('GPS ±' + esc(entry.gpsAccuracy) + ' m');
+  if (delta != null && delta > 0) bits.push('<span class="entry-delta">+' + delta + 'm</span>');
+  return `<div class="entry-row" data-act="edit-entry" data-id="${esc(entry.id)}" role="button" tabindex="0">
       <div class="entry-time mono">${entry.time ? esc(fmtZ(entry.time)) : '—'}</div>
       <div>
         <div class="entry-title">${esc(entry.event || 'Log entry')}${entry.kind ? '<span class="tag">checkpoint</span>' : ''}</div>
@@ -1318,9 +1311,32 @@ function entriesHTML(log) {
       </div>
       <button type="button" class="row-del" data-act="del-entry" data-id="${esc(entry.id)}" aria-label="Delete entry">×</button>
     </div>`;
-  }).join('');
+}
 
-  return '<div class="entry-list">' + rows + '</div>';
+/* The sortie as one timeline: flight log entries and observations together, in
+   time order. They are still stored, numbered and printed separately. */
+function timelineHTML(log) {
+  const items = [
+    ...log.entries.map(entry => ({ kind: 'entry', time: entry.time, at: entry.createdAt || 0, entry })),
+    ...log.observations.map((obs, index) => ({ kind: 'obs', time: obs.time, at: obs.createdAt || 0, obs, index }))
+  ];
+  if (!items.length) {
+    return `<div class="empty"><strong>Nothing logged yet</strong>Checkpoints you tap and observations you add appear here, in time order.</div>`;
+  }
+  const minutes = item => (isValidTime(item.time) ? timeToMin(item.time) : null);
+  items.sort((x, y) => {
+    const a = minutes(x);
+    const b = minutes(y);
+    if (a != null && b != null && a !== b) return a - b;
+    return x.at - y.at;
+  });
+  let previous = null;
+  return '<div class="timeline">' + items.map(item => {
+    if (item.kind === 'obs') return obsCardHTML(log, item.obs, item.index);
+    const row = entryRowHTML(item.entry, previous);
+    previous = item.entry;
+    return row;
+  }).join('') + '</div>';
 }
 
 /* Tach start and end follow the readings taken at Engine Start and Shut Down
@@ -1429,7 +1445,6 @@ function opsCardHTML(log) {
 }
 
 function flyView(log) {
-  const obsList = log.observations.map((obs, i) => obsCardHTML(log, obs, i)).join('');
   return `<div class="stack">
     ${installBannerHTML()}
     ${opsBanner(log)}
@@ -1442,22 +1457,15 @@ function flyView(log) {
       <button type="button" class="btn soft wide gps-mark" data-act="add-checkpoint">+ Checkpoint</button>
       <div class="gps-hint">Tap a checkpoint to stamp the time and position. + Checkpoint adds one of your own.</div>
     </section>
-    <section class="card">
+    <section class="card" id="timeline-card">
       <div class="card-head">
         <div class="head-left">
-          <h2>Flight log</h2>
-          <span class="count-badge">${log.entries.length}</span>
+          <h2>Timeline</h2>
+          <span class="count-badge">${log.entries.length + log.observations.length}</span>
         </div>
-        <button class="btn small" data-act="add-entry">+ Entry</button>
+        <button class="btn small primary" data-act="add-obs">+ Observation</button>
       </div>
-      ${entriesHTML(log)}
-    </section>
-    <section class="card" id="obs-card">
-      <div class="card-head">
-        <div class="head-left"><h2>Observations</h2><span class="count-badge">${log.observations.length}</span></div>
-        <button class="btn small primary" data-act="add-obs">+ New</button>
-      </div>
-      ${obsList || `<div class="empty"><strong>No observations yet</strong>Tap “New” after each sighting. Time, Hobbs and position are filled in for you.</div>`}
+      ${timelineHTML(log)}
     </section>
     ${opsCardHTML(log)}
   </div>`;
@@ -1707,7 +1715,7 @@ function opsRowHTML(log, op, index) {
 
 function obsCardHTML(log, obs, index) {
   const photos = Array.isArray(obs.photos) ? obs.photos : [];
-  return `<article class="obs">
+  return `<article class="obs" data-obs-id="${esc(obs.id)}">
     <div class="obs-head">
       <span class="badge">Obs ${index + 1}</span>
       <span class="obs-time mono">${obs.time ? esc(fmtZ(obs.time)) : ''}</span>
@@ -3166,23 +3174,28 @@ function quickLog(kind, label) {
 
 function addObservation() {
   const log = activeLog();
-  const position = lastPosition(log);
+  const fix = freshFix();
+  const position = fix ? { lat: fmtCoord(fix.lat, true), lon: fmtCoord(fix.lon, false) } : lastPosition(log);
   const obs = {
     id: uid(),
     time: nowZ(),
     hobbs: lastHobbs(log),
     lat: position.lat,
     lon: position.lon,
-    text: ''
+    text: '',
+    createdAt: Date.now()
   };
+  if (fix) {
+    obs.gpsAccuracy = Math.round(fix.accuracy);
+    obs.gpsTime = fmtZ(hhmmFromMs(fix.at));
+  }
   log.observations.push(obs);
   save();
   activeTab = 'fly';
   render();
-  if (state.settings.gpsLive) autoGpsObservation(obs);
+  if (!fix && state.settings.gpsLive) autoGpsObservation(obs);
   requestAnimationFrame(() => {
-    const cards = $$('.obs');
-    const last = cards[cards.length - 1];
+    const last = $('.obs[data-obs-id="' + obs.id + '"]');
     if (last) {
       const area = last.querySelector('textarea');
       if (area) {
