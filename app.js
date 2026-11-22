@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.6.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -576,7 +576,9 @@ function newState() {
       keepAwake: false,
       gpsAuto: false,
       opsInterval: 30,
-      introDismissed: false
+      introDismissed: false,
+      termsAccepted: 0,
+      termsAcceptedAt: 0
     },
     logs: [log]
   };
@@ -1914,9 +1916,13 @@ function setupSignature() {
    Sheets
    ========================================================================= */
 
+// True while a sheet that must be answered (the terms) is showing.
+let sheetLocked = false;
+
 function openSheet(options) {
   const overlay = $('#overlay');
   if (!overlay) return;
+  sheetLocked = !!options.locked;
   sheetOnClose = options.onClose || null;
   overlay.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(options.title)}">
     <div class="sheet-head">
@@ -1924,9 +1930,9 @@ function openSheet(options) {
         <h2>${options.title}</h2>
         ${options.sub ? '<div class="sheet-sub">' + esc(options.sub) + '</div>' : ''}
       </div>
-      <button type="button" class="icon-btn" data-close aria-label="Close">
+      ${options.locked ? '' : `<button type="button" class="icon-btn" data-close aria-label="Close">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
-      </button>
+      </button>`}
     </div>
     <div class="sheet-body">${options.body || ''}</div>
     ${options.footer ? '<div class="sheet-foot">' + options.footer + '</div>' : ''}
@@ -1937,13 +1943,97 @@ function openSheet(options) {
 
 function closeSheet() {
   const overlay = $('#overlay');
-  if (!overlay) return;
+  if (!overlay || sheetLocked) return;
   overlay.classList.remove('show');
   overlay.innerHTML = '';
   document.documentElement.classList.remove('sheet-open');
   const callback = sheetOnClose;
   sheetOnClose = null;
   if (typeof callback === 'function') callback();
+}
+
+/* =========================================================================
+   Disclaimer & terms
+   ========================================================================= */
+
+const FEEDBACK_EMAIL = 'thomas.vandevelde@mawg.cap.gov';
+
+// Opens the device's mail app with the version filled in; nothing is sent by the app itself.
+function feedbackHref() {
+  const subject = 'Observer Log feedback (v' + APP_VERSION + ')';
+  const body = '\n\n\n— Observer Log v' + APP_VERSION;
+  return 'mailto:' + FEEDBACK_EMAIL + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+}
+
+// Raise this when the text below changes in substance: everyone is asked again.
+const TERMS_VERSION = 1;
+
+function termsNeeded() {
+  return state.settings.termsAccepted !== TERMS_VERSION;
+}
+
+function termsHTML() {
+  return `<div class="terms">
+    <h3>Disclaimer</h3>
+    <p><strong>Not an official Civil Air Patrol product.</strong> Observer Log is a personal tool made by a
+      CAP member. It is not affiliated with, endorsed by, or supported by Civil Air Patrol, Inc. or the
+      United States Air Force.</p>
+    <p><strong>Not for navigation.</strong> This app is not a certified electronic flight bag and must not
+      be used as a source of navigation, position, time, fuel or aircraft performance information. GPS
+      positions, times, totals and imported search-area coordinates may be wrong, out of date or missing.
+      Check everything against the aircraft's instruments and official sources.</p>
+    <p><strong>Fly the aircraft first.</strong> Using this app must never distract from crew duties or
+      from the safe conduct of the flight. The pilot in command and the crew remain solely responsible
+      for the safety of the flight and for every decision made during it.</p>
+    <p><strong>Not a replacement for required records.</strong> The log and the PDF it produces do not
+      replace any form, system or report that Civil Air Patrol or your wing requires. You are responsible
+      for checking that what you submit is complete and correct.</p>
+
+    <h3>Terms of use</h3>
+    <p><strong>1. No warranty.</strong> The app is provided “as is” and “as available”, without warranty of
+      any kind, express or implied, including fitness for a particular purpose, accuracy and
+      uninterrupted or error-free operation.</p>
+    <p><strong>2. Limitation of liability.</strong> To the fullest extent the law allows, the developer is
+      not liable for any loss, damage, injury or claim arising from the use of, or the inability to use,
+      this app, including lost or incorrect data and decisions made in reliance on it. You use it at your
+      own risk.</p>
+    <p><strong>3. Your data.</strong> Everything you enter is stored only on this device. Nothing is sent to
+      a server. Data can be lost if the app is removed, its website data is cleared, or the device
+      fails. Keeping backups is your responsibility.</p>
+    <p><strong>4. Mission information.</strong> You are responsible for handling mission information,
+      photos and exported files in line with Civil Air Patrol regulations and any restrictions on the
+      mission.</p>
+    <p><strong>5. Third parties.</strong> Civil Air Patrol names and emblems are the property of Civil Air
+      Patrol, Inc. ForeFlight is a trademark of its owner. The ForeFlight import feature is not
+      affiliated with or endorsed by ForeFlight.</p>
+    <p><strong>6. Changes.</strong> These terms may change as the app changes. When they do, you will be
+      asked to accept them again before continuing.</p>
+    <p>If you do not accept these terms, do not use the app.</p>
+  </div>`;
+}
+
+// gate = true: shown at launch, cannot be dismissed without accepting.
+function termsSheet(gate) {
+  const acceptedAt = state.settings.termsAcceptedAt;
+  openSheet({
+    title: 'Disclaimer &amp; terms',
+    sub: gate ? 'Please read and accept to continue' : '',
+    locked: !!gate,
+    body: termsHTML() + (!gate && acceptedAt
+      ? `<p class="sheet-note">Accepted on this device on ${esc(new Date(acceptedAt).toLocaleDateString())}.</p>`
+      : ''),
+    footer: gate
+      ? `<button type="button" class="btn primary" data-act="accept-terms">I have read and accept</button>`
+      : `<button type="button" class="btn primary" data-close>Done</button>`
+  });
+}
+
+function acceptTerms() {
+  state.settings.termsAccepted = TERMS_VERSION;
+  state.settings.termsAcceptedAt = Date.now();
+  save();
+  sheetLocked = false;
+  closeSheet();
 }
 
 function field(label, inner, className) {
@@ -2430,6 +2520,14 @@ function menuSheet() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.9.7-1.5 1.2-1.5 2.5"/><path d="M12 17h.01"/></svg>
             <span>Help &amp; install<span class="mi-sub">Add to home screen, offline use</span></span>
           </button>
+          <button type="button" class="menu-item" data-act="terms">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
+            <span>Disclaimer &amp; terms<span class="mi-sub">Not for navigation, no warranty</span></span>
+          </button>
+          <a class="menu-item" href="${esc(feedbackHref())}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/></svg>
+            <span>Send feedback<span class="mi-sub">Email a problem or idea to ${esc(FEEDBACK_EMAIL)}</span></span>
+          </a>
         </div>
       </div>
 
@@ -2828,7 +2926,10 @@ function importJSON() {
         }
       });
 
-      if (data.settings) state.settings = Object.assign(state.settings, data.settings);
+      if (data.settings) {
+        const { termsAccepted, termsAcceptedAt } = state.settings;
+        state.settings = Object.assign(state.settings, data.settings, { termsAccepted, termsAcceptedAt });
+      }
       save();
       applyTheme();
       render();
@@ -3434,7 +3535,9 @@ function exportPdf() {
 
 function resetAll() {
   if (!confirm('Erase every log stored on this iPad? Export a backup first if you need one.')) return;
+  const { termsAccepted, termsAcceptedAt } = state.settings;
   state = newState();
+  Object.assign(state.settings, { termsAccepted, termsAcceptedAt });   // erasing logs is not un-accepting
   applyTheme();
   closeSheet();
   activeTab = 'log';
@@ -3927,6 +4030,8 @@ const actions = {
   'menu': () => menuSheet(),
   'settings': () => settingsSheet(),
   'help': () => helpSheet(),
+  'terms': () => termsSheet(false),
+  'accept-terms': () => acceptTerms(),
   'print': () => printLog(),
   'share-log': () => {
     // Pick up a signature stroke that has not been saved yet.
@@ -4399,6 +4504,7 @@ async function boot() {
   state = loaded ? normalizeState(loaded) : newState();
   applyTheme();
   render();
+  if (termsNeeded()) termsSheet(true);
 
   setSaveStatus('saved', loaded ? 'Saved ' + fmtClock(state.savedAt ? new Date(state.savedAt) : new Date()) : 'On this device');
   if (!loaded) save();
