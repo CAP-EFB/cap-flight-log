@@ -325,10 +325,14 @@ function coordPair(latRaw, lonRaw) {
    In the iPad app (Capacitor) GPS, sharing and files go through native plugins;
    in a browser the same calls fall back to the web APIs. */
 const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+// registerPlugin comes from vendor/capacitor.js, which only the app build loads.
+const registerNativePlugin = NATIVE
+  ? ((window.capacitorExports && window.capacitorExports.registerPlugin) || window.Capacitor.registerPlugin)
+  : null;
 const Native = NATIVE ? {
-  Geolocation: window.Capacitor.registerPlugin('Geolocation'),
-  Share: window.Capacitor.registerPlugin('Share'),
-  Filesystem: window.Capacitor.registerPlugin('Filesystem')
+  Geolocation: registerNativePlugin('Geolocation'),
+  Share: registerNativePlugin('Share'),
+  Filesystem: registerNativePlugin('Filesystem')
 } : null;
 
 function geoAvailable() {
