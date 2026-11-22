@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.20.0';
+const APP_VERSION = '1.20.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1769,6 +1769,7 @@ function renderStrip() {
 function renderTabbar() {
   const bar = $('#tabbar');
   if (bar) bar.classList.toggle('locked', !sortieReady());
+  if (bar) bar.classList.toggle('no-mission', !activeLog().missionCreated);
   $$('#tabbar .tab').forEach(btn => {
     const on = btn.dataset.tab === activeTab;
     btn.classList.toggle('active', on);
@@ -1800,6 +1801,8 @@ function render() {
   const log = activeLog();
 
   if (!TABS.includes(activeTab) && !SCREENS.includes(activeTab)) activeTab = defaultTab(log);
+  // Sorties needs a mission to show
+  if (activeTab !== 'logbook' && !log.missionCreated) activeTab = 'logbook';
   if (activeTab === 'logbook') view.innerHTML = logbookView();
   else if (activeTab === 'plan') view.innerHTML = planView(log);
   else if (activeTab === 'fly') view.innerHTML = flyView(log);
@@ -2184,19 +2187,6 @@ function missionSectionsHTML(log) {
 `;
 }
 
-// The Sorties tab before a mission is picked.
-function noMissionHTML() {
-  return `<div class="stack">
-    <section class="card">
-      <div class="empty"><strong>No mission selected</strong>Pick a mission on the Missions tab, or add one from WMIRS.</div>
-      <div class="btn-row" style="justify-content:center">
-        <button class="btn" data-act="show-missions">Missions</button>
-        <button class="btn primary" data-act="new-mission">Add mission</button>
-      </div>
-    </section>
-  </div>`;
-}
-
 function opsCardHTML(log) {
   const ops = log.ops.map((op, i) => opsRowHTML(log, op, i)).reverse().join('');
   return `<section class="card" id="ops-card">
@@ -2263,7 +2253,6 @@ function planView(log) {
     <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
   </div>`).join('');
 
-  if (!log.missionCreated) return noMissionHTML();
   // Until the mission has a sortie, the tab is the mission and the new-sortie form.
   if (!sortieReady(log)) return `<div class="stack">${missionSectionsHTML(log)}</div>`;
 
@@ -5662,7 +5651,11 @@ const actions = {
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) return;
-  // Only Missions and Sorties open until a mission with a sortie is picked.
+  // Sorties opens once a mission is picked; the rest once it has a sortie.
+  if (tab === 'plan' && !activeLog().missionCreated) {
+    toast('Pick or add a mission first');
+    return;
+  }
   if (tab !== 'plan' && tab !== 'logbook' && !sortieReady()) {
     tab = activeLog().missionCreated ? 'plan' : 'logbook';
     toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Pick or add a mission first');
