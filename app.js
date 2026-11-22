@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -379,6 +379,127 @@ function utcDateNear(hhmm) {
 /* ---------- Live Activity ----------
    From Engine Start to Shut Down the Lock Screen and Dynamic Island show the
    sortie: phase, time since wheels up, the next OPS check and the CAP grid. */
+/* ---------- flight recorder ----------
+   From Engine Start to Shut Down the sortie's track is recorded. In the app
+   the native recorder keeps going in the background (ForeFlight in front, iPad
+   locked) and writes to a file; the log copies it in when the app is open. In
+   a browser, points come from the live GPS while the page is on screen. */
+let trackSortieId = null;
+let trackPullTimer = null;
+const saveQuiet = () => save(true);
+
+function sortieRunning(log) {
+  return !!(log && sortieReady(log) && isValidTime(log.times.engineStart.time) && !log.times.shutDown.time);
+}
+
+async function pullTrack(log) {
+  if (!NATIVE || !log) return;
+  try {
+    const result = await Native.MissionLog.readTrack({ sortieId: log.id });
+    const points = (result && result.points) || [];
+    if (points.length >= log.track.length) {
+      log.track = points;
+      saveQuiet();
+      if (positionMap) drawTrackOnMap();
+    }
+  } catch (err) {
+    console.warn('could not read the track', err);
+  }
+}
+
+async function syncTrackRecorder() {
+  if (!state) return;
+  const recording = trackSortieId ? state.logs.find(l => l.id === trackSortieId) : null;
+  if (trackSortieId && (!recording || !sortieRunning(recording) || !state.settings.recordTrack)) {
+    if (NATIVE) {
+      await Native.MissionLog.stopTrack().catch(() => {});
+      await pullTrack(recording);
+    }
+    trackSortieId = null;
+  }
+  const log = activeLog();
+  if (!trackSortieId && state.settings.recordTrack && sortieRunning(log)) {
+    trackSortieId = log.id;
+    if (NATIVE) await Native.MissionLog.startTrack({ sortieId: log.id }).catch(err => console.warn('recorder', err));
+  }
+  clearInterval(trackPullTimer);
+  trackPullTimer = trackSortieId && NATIVE
+    ? setInterval(() => pullTrack(state.logs.find(l => l.id === trackSortieId)), 60000)
+    : null;
+}
+
+// Browser fallback: a point every 10 s and 100 m from the live GPS.
+function recordWebTrackPoint(fix) {
+  if (NATIVE || !trackSortieId || !fix || fix.accuracy > 200) return;
+  const log = state.logs.find(l => l.id === trackSortieId);
+  if (!log) return;
+  const last = log.track[log.track.length - 1];
+  if (last && (fix.at - last[0] < 10000 || distanceMetres(last[1], last[2], fix.lat, fix.lon) < 100)) return;
+  log.track.push([fix.at, fix.lat, fix.lon, -9999, Math.round(fix.accuracy), -1, -1]);
+  saveQuiet();
+}
+
+function distanceMetres(lat1, lon1, lat2, lon2) {
+  const r = 6371000, rad = Math.PI / 180;
+  const a = Math.sin((lat2 - lat1) * rad / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin((lon2 - lon1) * rad / 2) ** 2;
+  return 2 * r * Math.asin(Math.sqrt(a));
+}
+
+function trackStats(log) {
+  const t = log.track;
+  if (!t.length) return null;
+  let metres = 0;
+  for (let i = 1; i < t.length; i++) metres += distanceMetres(t[i - 1][1], t[i - 1][2], t[i][1], t[i][2]);
+  const alts = t.map(p => p[3]).filter(a => a > -9000);
+  return {
+    points: t.length,
+    nm: metres / 1852,
+    minutes: Math.round((t[t.length - 1][0] - t[0][0]) / 60000),
+    maxAltFt: alts.length ? Math.round(Math.max(...alts) * 3.28084) : null,
+    from: t[0][0],
+    to: t[t.length - 1][0]
+  };
+}
+
+function trackGPX(log) {
+  const time = ms => new Date(ms).toISOString();
+  const pts = log.track.map(p => `      <trkpt lat="${p[1].toFixed(6)}" lon="${p[2].toFixed(6)}">` +
+    (p[3] > -9000 ? `<ele>${p[3].toFixed(1)}</ele>` : '') + `<time>${time(p[0])}</time></trkpt>`).join('\n');
+  const name = (log.mission || 'Mission') + ' sortie ' + (log.sortie || '');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Mission Log" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>${esc(name)}</name>
+    <trkseg>
+${pts}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+}
+
+function trackCardHTML(log) {
+  const stats = trackStats(log);
+  const recording = trackSortieId === log.id;
+  return `<section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Flight track</h2>${recording ? '<span class="rec-dot">REC</span>' : ''}</div>
+        <span class="muted small">${state.settings.recordTrack ? 'Recorded from Engine Start to Shut Down' : 'Recording is off in Settings'}</span>
+      </div>
+      ${stats ? `<div class="totals" style="grid-template-columns:repeat(4,1fr);margin-top:0;padding-top:0;border-top:0">
+        <div class="total"><div class="tl">Distance</div><div class="tv">${stats.nm.toFixed(1)} NM</div></div>
+        <div class="total"><div class="tl">Duration</div><div class="tv">${fmtDuration(stats.minutes)}</div></div>
+        <div class="total"><div class="tl">Max altitude</div><div class="tv">${stats.maxAltFt == null ? '—' : stats.maxAltFt.toLocaleString() + ' ft'}</div></div>
+        <div class="total"><div class="tl">Points</div><div class="tv">${stats.points}</div></div>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn small" data-act="track-map">Show on chart</button>
+        <button class="btn small" data-act="track-gpx">Export GPX</button>
+      </div>` : `<div class="empty"><strong>No track yet</strong>${recording ? 'Recording. Points appear here every minute.' : 'The track is recorded automatically once Engine Start is logged.'}</div>`}
+    </section>`;
+}
+
 let sortieActivityOn = false;
 let lastActivityGrid = '';
 
@@ -451,7 +572,7 @@ async function openSharedFile(url) {
     const text = typeof read.data === 'string' ? read.data : await read.data.text();
     if (/\.fpl$/i.test(name) || /<flight-plan/i.test(text.slice(0, 600))) {
       if (!sortieReady()) {
-        toast('Create the mission and a sortie first, then open the flight plan again');
+        toast('Add the mission and a sortie first, then open the flight plan again');
         return;
       }
       if (activeTab !== 'plan') switchTab('plan');
@@ -478,6 +599,12 @@ function startNative() {
   setTimeout(() => Native.SplashScreen.hide().catch(() => {}), 150);
   scheduleOpsReminder();
   syncSortieActivity();
+  Native.MissionLog.trackStatus().then(status => {
+    if (status && status.sortieId) trackSortieId = status.sortieId;
+    syncTrackRecorder();
+    const log = state.logs.find(l => l.id === trackSortieId);
+    if (log) pullTrack(log);
+  }).catch(() => syncTrackRecorder());
 }
 
 /* While the on-screen keyboard is up, the tab bar steps aside so it does not
@@ -613,6 +740,7 @@ function startGpsWatch() {
       gpsState = 'on';
       renderGpsChip();
       updatePositionSheet();
+      recordWebTrackPoint(lastGpsFix);
       if (sortieActivityOn && capGridName(lastGpsFix.lat, lastGpsFix.lon) !== lastActivityGrid) syncSortieActivity();
     },
     error => {
@@ -810,10 +938,26 @@ function positionSheet() {
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, dot, accuracy, follow: true, remove: () => map.remove() };
+  positionMap = { map, dot, accuracy, follow: true, trackLine: null, remove: () => map.remove() };
+  drawTrackOnMap();
+  pullTrack(activeLog());
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
   // the sheet animates in; let the map measure itself once it has
   setTimeout(() => map.invalidateSize(), 260);
+}
+
+function drawTrackOnMap(fit) {
+  if (!positionMap || !window.L) return;
+  const log = activeLog();
+  const pts = log.track.map(p => [p[1], p[2]]);
+  if (positionMap.trackLine) positionMap.trackLine.remove();
+  positionMap.trackLine = pts.length > 1
+    ? L.polyline(pts, { color: '#d81b60', weight: 3, opacity: 0.9 }).addTo(positionMap.map)
+    : null;
+  if (fit && positionMap.trackLine) {
+    positionMap.follow = false;
+    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: 11 });
+  }
 }
 
 // Keep the open position sheet moving with each new fix.
@@ -1163,7 +1307,9 @@ function blankLog() {
     sketch: '',
     observations: [],
     signoff: { name: '', capid: '', dateTime: '', signature: '' },
-    sar: blankSar()
+    sar: blankSar(),
+    // flight track: [time ms, lat, lon, altitude m, accuracy m, speed m/s, course °]
+    track: []
   };
 }
 
@@ -1182,6 +1328,7 @@ function newState() {
       opsInterval: 30,
       hobbsPrompt: true,
       installDismissed: false,
+      recordTrack: true,
       termsAccepted: 0,
       termsAcceptedAt: 0
     },
@@ -1211,6 +1358,7 @@ function normalizeLog(raw) {
   log.radio = Object.assign({ main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' }, (raw && raw.radio) || {});
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
   log.sar = normalizeSar(raw && raw.sar);
+  log.track = Array.isArray(raw && raw.track) ? raw.track.filter(p => Array.isArray(p) && p.length >= 3) : [];
   log.navAids = Array.isArray(raw && raw.navAids) && raw.navAids.length
     ? raw.navAids.map(n => Object.assign({ ident: '', freq: '', radial: '' }, n || {}))
     : base.navAids;
@@ -1393,8 +1541,11 @@ function setSaveStatus(kind, text) {
 }
 
 let opsReminderTimer = null;
+let trackSyncTimer = null;
 
-function save() {
+// quiet: a background update (a track point) that should not reschedule
+// the reminder, Live Activity and recorder.
+function save(quiet) {
   if (!state) return;
   state.updatedAt = Date.now();
   state.savedAt = Date.now();
@@ -1415,10 +1566,13 @@ function save() {
       saveInFlight = false;
     }
   }, 420);
+  if (quiet) return;
   if (NATIVE) {
     clearTimeout(opsReminderTimer);
     opsReminderTimer = setTimeout(() => { scheduleOpsReminder(); syncSortieActivity(); }, 1500);
   }
+  clearTimeout(trackSyncTimer);
+  trackSyncTimer = setTimeout(syncTrackRecorder, 1200);
 }
 
 /* ---------- theme / wake lock ---------- */
@@ -1879,12 +2033,12 @@ function missionSectionsHTML(log) {
   const step = (n, text, status) => `<div class="step ${status}"><span class="step-num">${status === 'done' ? '✓' : n}</span>${text}</div>`;
   return `<button type="button" class="back-link" data-act="show-missions">‹ All missions</button>
     ${sorties.length ? '' : `<div class="steps">
-      ${step(1, 'Create the mission', created ? 'done' : 'now')}
+      ${step(1, 'Add the mission', created ? 'done' : 'now')}
       ${step(2, 'Add its first sortie', created ? 'now' : 'later')}
     </div>`}
     <section class="card ${created ? '' : 'card-current'}" id="mission-card">
       <div class="card-head">
-        <div class="head-left"><h2>${created ? 'Mission' : 'Step 1 · Create the mission'}</h2></div>
+        <div class="head-left"><h2>${created ? 'Mission' : 'Step 1 · Add the mission'}</h2></div>
         <span class="muted small">Shared by every sortie</span>
       </div>
       <div class="form-grid">
@@ -1898,7 +2052,7 @@ function missionSectionsHTML(log) {
         ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
       </div>
       ${created ? '' : `<div class="btn-row" style="margin-top:14px">
-        <button class="btn primary" data-act="create-mission">Create mission</button>
+        <button class="btn primary" data-act="create-mission">Add mission</button>
         <span class="sheet-note" style="margin:0;align-self:center">The mission number is required. Date and base can be added later.</span>
       </div>`}
     </section>
@@ -2133,6 +2287,8 @@ function debriefView(log) {
     </section>
 
     ${tachCardHTML(log)}
+
+    ${trackCardHTML(log)}
 
     <section class="card">
       <div class="card-head">
@@ -3499,6 +3655,13 @@ function settingsSheet() {
       </div>
 
       <div class="setting-row">
+        <div class="setting-label">Record flight track<small>From Engine Start to Shut Down${NATIVE ? ', also in the background' : ', while this page is open'}</small></div>
+        <button type="button" class="toggle ${settings.recordTrack ? 'on' : ''}" data-act="toggle-record-track">
+          <span class="tick">✓</span> ${settings.recordTrack ? 'On' : 'Off'}
+        </button>
+      </div>
+
+      <div class="setting-row">
         <div class="setting-label">Hobbs keypad<small>Ask for Hobbs after each checkpoint</small></div>
         <button type="button" class="toggle ${settings.hobbsPrompt ? 'on' : ''}" data-act="toggle-hobbs-prompt">
           <span class="tick">✓</span> ${settings.hobbsPrompt ? 'On' : 'Off'}
@@ -3772,7 +3935,7 @@ function createLog() {
   activeTab = 'plan';
   save();
   render();
-  toast('New mission started');
+  toast('Add the mission from WMIRS: enter its number');
 }
 
 // The next sortie of this mission: same crew, aircraft, frequencies and search
@@ -3781,7 +3944,7 @@ function addSortie() {
   const current = activeLog();
   if (!current.missionCreated) {
     switchTab('plan');
-    toast('Create the mission first');
+    toast('Add the mission first');
     return;
   }
   const placeholder = missionSorties(current).find(l => !l.started);
@@ -5044,7 +5207,7 @@ const actions = {
     syncMissionField(log, 'missionCreated');
     save();
     render();
-    toast('Mission created · now add its first sortie');
+    toast('Mission added · now add its first sortie');
   },
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
@@ -5162,6 +5325,20 @@ const actions = {
     if (!positionMap || !fix) return;
     positionMap.follow = true;
     positionMap.map.setView([fix.lat, fix.lon], Math.max(positionMap.map.getZoom(), 10));
+  },
+  'track-map': () => {
+    positionSheet();
+    setTimeout(() => drawTrackOnMap(true), 320);
+  },
+  'track-gpx': () => {
+    const log = activeLog();
+    if (!log.track.length) return;
+    shareFile(exportName('gpx'), new Blob([trackGPX(log)], { type: 'application/gpx+xml' }));
+  },
+  'toggle-record-track': () => {
+    state.settings.recordTrack = !state.settings.recordTrack;
+    save();
+    settingsSheet();
   },
   'add-obs': () => addObservation(),
   'del-obs': el => {
@@ -5374,7 +5551,7 @@ function switchTab(tab) {
   // Only Plan opens until the mission exists and has a sortie.
   if (tab !== 'plan' && !sortieReady()) {
     tab = 'plan';
-    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Create the mission first');
+    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Add the mission first');
   }
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();

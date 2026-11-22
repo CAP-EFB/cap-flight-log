@@ -10,9 +10,9 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes → Debrief → Sign**.
 
-- **Missions and sorties** — a mission holds one or more sorties. A new mission is set up in two steps on
-  the Mission screen: create the mission (number required), then add its first sortie; the sortie tabs open
-  after that. The logo opens the list of all missions. The header's sortie switcher (or
+- **Missions and sorties** — a mission holds one or more sorties. A new mission is set up in two steps at
+  the top of the Plan tab: add the mission from WMIRS (number required), then add its first sortie; the other
+  tabs open after that. The logo opens the list of all missions. The header's sortie switcher (or
   Menu → + Sortie) starts the next sortie with the same crew, aircraft, frequencies and search area;
   mission number, base, mission date and your name and CAPID are shared by every sortie.
 - **Plan** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
@@ -21,6 +21,8 @@ The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes �
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
 - **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
+- **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), shown
+  on the chart and on Debrief, and exportable as GPX.
 - **Debrief** — flight times and totals, Hobbs and tach end/start/total with Hobbs split into In Area and
   To/From, the actual column of the SAR worksheet, effectiveness, visibility and crew remarks.
 - **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
