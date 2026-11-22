@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -725,6 +725,55 @@ function sarReport(log) {
   };
 }
 
+/* ---------- crew ----------
+   A sortie's crew is a list, so it can hold more than one observer, scanner or
+   photographer. Roles as CAP writes them: mission pilot, observer, scanner,
+   airborne photographer. */
+const CREW_ROLES = [['MP', 'Mission pilot'], ['MO', 'Mission observer'], ['MS', 'Mission scanner'], ['AP', 'Airborne photographer']];
+const CREW_ROLE_KEYS = CREW_ROLES.map(([key]) => key);
+
+function crewMember(role) {
+  return { id: uid(), role: role || 'MS', name: '', capid: '' };
+}
+
+// Logs saved before 1.11.0 have one named slot per role; turn them into the list.
+function normalizeCrew(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map(m => {
+      const member = Object.assign(crewMember(), m || {});
+      if (!CREW_ROLE_KEYS.includes(member.role)) member.role = 'MS';
+      return member;
+    });
+  }
+  const old = raw || {};
+  const list = [
+    Object.assign(crewMember('MP'), { name: old.pilot || '' }),
+    Object.assign(crewMember('MO'), { name: old.observer || '' })
+  ];
+  if (old.scanner) list.push(Object.assign(crewMember('MS'), { name: old.scanner }));
+  if (old.ap) list.push(Object.assign(crewMember('AP'), { name: old.ap }));
+  return list;
+}
+
+// Names for one role, in the order entered: "A. Rivera; J. Okafor".
+function crewNames(log, role) {
+  return log.crew.filter(m => m.role === role && String(m.name || '').trim())
+    .map(m => m.name.trim()).join('; ');
+}
+
+// Crew for the PDF and printout: everyone with a name or CAPID, pilot first.
+function crewForPrint(log) {
+  const label = Object.fromEntries(CREW_ROLES);
+  return crewInOrder(log)
+    .filter(m => String(m.name || '').trim() || String(m.capid || '').trim())
+    .map(m => ({ role: m.role, roleName: label[m.role] || m.role, name: String(m.name || '').trim(), capid: String(m.capid || '').trim() }));
+}
+
+// Everyone, pilot first, for the header.
+function crewInOrder(log) {
+  return CREW_ROLE_KEYS.flatMap(role => log.crew.filter(m => m.role === role));
+}
+
 function blankLog() {
   return {
     id: uid(),
@@ -743,7 +792,7 @@ function blankLog() {
     airspeed: '',
     entry: { lat: '', lon: '' },
     exit: { lat: '', lon: '' },
-    crew: { pilot: '', observer: '', ap: '', scanner: '' },
+    crew: [crewMember('MP'), crewMember('MO'), crewMember('MS')],
     radio: { main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' },
     navAids: [
       { ident: '', freq: '', radial: '' },
@@ -795,7 +844,7 @@ function normalizeLog(raw) {
   });
   log.entry = Object.assign({ lat: '', lon: '' }, (raw && raw.entry) || {});
   log.exit = Object.assign({ lat: '', lon: '' }, (raw && raw.exit) || {});
-  log.crew = Object.assign({ pilot: '', observer: '', ap: '', scanner: '' }, (raw && raw.crew) || {});
+  log.crew = normalizeCrew(raw && raw.crew);
   log.radio = Object.assign({ main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' }, (raw && raw.radio) || {});
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
   log.sar = normalizeSar(raw && raw.sar);
@@ -1149,7 +1198,7 @@ function renderStrip() {
     $('#sortieLabel').textContent = sortieLabel(log, sorties.indexOf(log)) +
       (sorties.length > 1 ? ' of ' + sorties.length : '');
   }
-  const rest = [log.callsign, log.crew.pilot, log.crew.observer, log.crew.ap, log.crew.scanner]
+  const rest = [log.callsign, ...crewInOrder(log).map(m => m.name)]
     .map(value => String(value || '').trim())
     .filter(Boolean);
   sub.textContent = rest.join('  ·  ');
@@ -1469,10 +1518,21 @@ function planView(log) {
       </div>
       <div class="subhead">Crew</div>
       <div class="form-grid">
-        ${field('Pilot', textInput('crew.pilot', crew.pilot, { autocap: 'characters' }))}
-        ${field('Observer', textInput('crew.observer', crew.observer, { autocap: 'characters' }))}
-        ${field('AP', textInput('crew.ap', crew.ap, { autocap: 'characters' }))}
-        ${field('Scanner', textInput('crew.scanner', crew.scanner, { autocap: 'characters' }))}
+      </div>
+      <div class="crew-list">
+        ${crew.map((m, i) => `<div class="crew-row">
+          <select class="input" data-bind="crew.${i}.role" aria-label="Role">
+            ${CREW_ROLES.map(([key, label]) => `<option value="${key}" ${m.role === key ? 'selected' : ''}>${key} · ${esc(label)}</option>`).join('')}
+          </select>
+          <input class="input" data-bind="crew.${i}.name" value="${esc(m.name)}" placeholder="Name" autocapitalize="characters" aria-label="Name">
+          <input class="input mono" data-bind="crew.${i}.capid" value="${esc(m.capid)}" placeholder="CAPID" inputmode="numeric" aria-label="CAPID">
+          <button type="button" class="row-del" data-act="del-crew" data-index="${i}" aria-label="Remove crew member">×</button>
+        </div>`).join('') || '<div class="empty"><strong>No crew yet</strong>Add each crew member with the buttons below.</div>'}
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        ${CREW_ROLE_KEYS.map(role => `<button type="button" class="btn small" data-act="add-crew" data-role="${role}">+ ${role}</button>`).join('')}
+      </div>
+      <div class="form-grid" style="margin-top:14px">
         ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
         ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
       </div>
@@ -3239,7 +3299,7 @@ function addSortie() {
   log.missionId = source.missionId;
   ['mission', 'base', 'capFlight', 'aircraft', 'callsign', 'sectional', 'grid', 'altitude', 'airspeed']
     .forEach(key => { log[key] = source[key]; });
-  log.crew = deepClone(source.crew);
+  log.crew = deepClone(source.crew).map(m => Object.assign(m, { id: uid() }));
   log.radio = deepClone(source.radio);
   log.navAids = deepClone(source.navAids);
   log.entry = deepClone(source.entry);
@@ -3368,7 +3428,7 @@ function exportSortie() {
     kind: 'sortie',
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
-    from: log.signoff.name || log.crew.observer || '',
+    from: log.signoff.name || crewNames(log, 'MO').split('; ')[0] || '',
     logs: [log]
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -3614,7 +3674,6 @@ function buildPdfBlob() {
     ['Mission', mission], ['Sortie', sortie], ['Aircraft N#', aircraft], ['Callsign', pdfSafe(log.callsign)],
     ['Base', pdfSafe(log.base)], ['CAP flight', pdfSafe(log.capFlight)], ['Sectional', pdfSafe(log.sectional)], ['Grid', pdfSafe(log.grid)],
     ['Altitude', pdfSafe(log.altitude)], ['Airspeed', pdfSafe(log.airspeed)], ['Entry point', coordText(log.entry.lat, log.entry.lon)], ['Exit point', coordText(log.exit.lat, log.exit.lon)],
-    ['Pilot', pdfSafe(log.crew.pilot)], ['Observer', pdfSafe(log.crew.observer)], ['AP', pdfSafe(log.crew.ap)], ['Scanner', pdfSafe(log.crew.scanner)],
     ['Main radio', pdfSafe(log.radio.main)], ['Guard radio', pdfSafe(log.radio.guard)], ['ATIS / AWOS', pdfSafe(log.radio.atis)], ['CTAF', pdfSafe(log.radio.ctaf)]
   ];
 
@@ -3640,7 +3699,42 @@ function buildPdfBlob() {
     const lines = item[1] ? doc.splitTextToSize(item[1], cellW - 8).slice(0, 2) : [];
     if (lines.length) doc.text(lines, x + 4, top + 17);
   });
-  y += cellH * 5 + 9;
+  y += cellH * 4 + 9;
+
+  // Crew: one line per person, two people side by side, so any number of
+  // observers, scanners or photographers fit.
+  const crew = crewForPrint(log);
+  const crewRows = [];
+  for (let i = 0; i < Math.max(crew.length, 2); i += 2) {
+    const pair = [crew[i], crew[i + 1]];
+    crewRows.push(pair.flatMap(m => m ? [m.role, pdfSafe(m.name), pdfSafe(m.capid)] : ['', '', '']));
+  }
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.text('CREW', M, y + 7);
+  doc.autoTable({
+    startY: y + 11,
+    margin: { left: M, right: M },
+    tableWidth: CW,
+    head: [['ROLE', 'NAME', 'CAPID', 'ROLE', 'NAME', 'CAPID']],
+    body: crewRows,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica', fontSize: 7.6, cellPadding: 2.4, textColor: dark,
+      lineColor: [150, 160, 170], lineWidth: 0.4, overflow: 'linebreak'
+    },
+    headStyles: { fillColor: [232, 238, 244], textColor: navy, fontSize: 6.2, fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 34, halign: 'center', fontStyle: 'bold' },
+      1: { cellWidth: CW / 2 - 34 - 62 },
+      2: { cellWidth: 62, halign: 'center' },
+      3: { cellWidth: 34, halign: 'center', fontStyle: 'bold' },
+      4: { cellWidth: CW / 2 - 34 - 62 },
+      5: { cellWidth: 62, halign: 'center' }
+    }
+  });
+  y = doc.lastAutoTable.finalY + 9;
 
   // Flight times and totals
   doc.setFont('helvetica', 'bold');
@@ -4104,12 +4198,14 @@ function buildPrint() {
     <div class="pv">${value ? esc(value) : '&nbsp;'}</div>
   </div>`;
 
-  const crewRow = [
-    ['Pilot', log.crew.pilot],
-    ['Observer', log.crew.observer],
-    ['AP', log.crew.ap],
-    ['Scanner', log.crew.scanner]
-  ].map(([label, value]) => cell(label, value)).join('');
+  const crewPrint = crewForPrint(log);
+  const crewTable = `<table class="p-table p-crew">
+      <thead><tr><th class="c">Role</th><th>Name</th><th class="c">CAPID</th><th class="c">Role</th><th>Name</th><th class="c">CAPID</th></tr></thead>
+      <tbody>${Array.from({ length: Math.max(1, Math.ceil(crewPrint.length / 2)) }, (_, r) => '<tr>' +
+        [crewPrint[r * 2], crewPrint[r * 2 + 1]].map(m => m
+          ? `<td class="c"><b>${esc(m.role)}</b></td><td>${esc(m.name)}</td><td class="c mono">${esc(m.capid)}</td>`
+          : '<td></td><td></td><td></td>').join('') + '</tr>').join('')}</tbody>
+    </table>`;
 
   const headerCells = [
     cell('Mission', log.mission),
@@ -4128,7 +4224,7 @@ function buildPrint() {
     cell('Guard radio', log.radio.guard),
     cell('ATIS / AWOS', log.radio.atis),
     cell('CTAF', log.radio.ctaf)
-  ].join('') + crewRow;
+  ].join('');
 
   const timesRows = TIME_DEFS.map(def => {
     const value = log.times[def.key] || {};
@@ -4205,6 +4301,7 @@ function buildPrint() {
       </div>
 
       <div class="p-meta">${headerCells}</div>
+      <div class="p-section" style="margin-top:0;margin-bottom:7pt"><div class="p-section-title">Crew</div>${crewTable}</div>
 
       <div class="p-cols">
         <div class="p-section" style="margin-top:0">
@@ -4552,6 +4649,28 @@ const actions = {
   'switch-log': el => switchLog(el.dataset.id),
   'new-log': () => createLog(),
   'add-sortie': () => addSortie(),
+  'add-crew': el => {
+    const log = activeLog();
+    log.crew.push(crewMember(el.dataset.role));
+    save();
+    render();
+    const names = $$('[data-bind$=".name"]', $('.crew-list'));
+    if (names.length) names[names.length - 1].focus();
+  },
+  'del-crew': el => {
+    const log = activeLog();
+    const index = Number(el.dataset.index);
+    const removed = log.crew[index];
+    if (!removed) return;
+    log.crew.splice(index, 1);
+    save();
+    render();
+    toast((removed.name || removed.role) + ' removed', 'Undo', () => {
+      log.crew.splice(index, 0, removed);
+      save();
+      render();
+    });
+  },
   'send-sortie': () => exportSortie(),
   'sortie-menu': () => sortieSheet(),
   'del-log': () => deleteLog(),

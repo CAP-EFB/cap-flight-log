@@ -809,6 +809,21 @@ select.input {
 /* ---------- nav aids / frequencies ---------- */
 
 .nav-grid { display: flex; flex-direction: column; gap: 8px; }
+/* crew: role, name, CAPID, remove */
+.crew-list { display: flex; flex-direction: column; gap: 8px; }
+.crew-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 2fr 120px 30px;
+  gap: 7px;
+  align-items: center;
+}
+.crew-row .input { min-height: 42px; font-size: 15px; }
+@media (max-width: 620px) {
+  .crew-row { grid-template-columns: 1fr 1fr 30px; }
+  .crew-row [data-bind$=".name"] { grid-column: 1 / 3; grid-row: 2; }
+  .crew-row .mono { grid-row: 1; grid-column: 2; }
+}
+
 .nav-row {
   display: grid;
   grid-template-columns: 26px 1fr 1fr 1fr 30px;
@@ -1459,6 +1474,8 @@ a.menu-item { text-decoration: none; }
   }
   table.p-table td { border: .6pt solid #9aa8b5; padding: 2.4pt 4pt; vertical-align: top; }
   table.p-table td.c, table.p-table th.c { text-align: center; }
+  table.p-crew td:nth-child(3n+1), table.p-crew th:nth-child(3n+1) { width: 7%; }
+  table.p-crew td:nth-child(3n), table.p-crew th:nth-child(3n) { width: 13%; }
   table.p-table td.mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 8pt; }
   table.p-table tr { break-inside: avoid; page-break-inside: avoid; }
   table.p-table td.remark { white-space: pre-wrap; }
