@@ -1074,6 +1074,8 @@ body.finger-draw #sketch { touch-action: none; }
 .tab.active { color: var(--blue); }
 .tab:active { background: var(--card-2); }
 
+body.keyboard-open .tabbar { display: none; }
+
 /* ---------- sheets ---------- */
 
 .overlay {

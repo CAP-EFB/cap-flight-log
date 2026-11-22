@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.13.1';
+const APP_VERSION = '1.13.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -332,8 +332,24 @@ const registerNativePlugin = NATIVE
 const Native = NATIVE ? {
   Geolocation: registerNativePlugin('Geolocation'),
   Share: registerNativePlugin('Share'),
-  Filesystem: registerNativePlugin('Filesystem')
+  Filesystem: registerNativePlugin('Filesystem'),
+  Keyboard: registerNativePlugin('Keyboard')
 } : null;
+
+/* While the on-screen keyboard is up, the tab bar steps aside so it does not
+   ride up over the form. The app is told by the keyboard plugin; a browser is
+   detected from the visual viewport shrinking. */
+function setKeyboardOpen(open) {
+  document.body.classList.toggle('keyboard-open', !!open);
+}
+if (NATIVE) {
+  Native.Keyboard.addListener('keyboardWillShow', () => setKeyboardOpen(true));
+  Native.Keyboard.addListener('keyboardWillHide', () => setKeyboardOpen(false));
+} else if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    setKeyboardOpen(window.innerHeight - window.visualViewport.height > 150);
+  });
+}
 
 function geoAvailable() {
   return NATIVE || (!!navigator.geolocation && window.isSecureContext);
