@@ -1,5 +1,5 @@
 /* Mission Log service worker — cache-first so the app works with no signal. */
-const CACHE = 'observer-log-v1.18.0';
+const CACHE = 'observer-log-v1.17.3';
 
 const ASSETS = [
   './',

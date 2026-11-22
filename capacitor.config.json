@@ -4,7 +4,7 @@
   "webDir": "www",
   "ios": {
     "contentInset": "never",
-    "backgroundColor": "#001489"
+    "backgroundColor": "#1c2632"
   },
   "plugins": {
     "Keyboard": {
@@ -13,7 +13,7 @@
     },
     "SplashScreen": {
       "launchAutoHide": false,
-      "backgroundColor": "#001489",
+      "backgroundColor": "#1c2632",
       "showSpinner": false
     }
   }

@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.18.0';
+const APP_VERSION = '1.17.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -966,10 +966,10 @@ function positionSheet() {
     return lat != null && lon != null ? [lat, lon] : null;
   });
   if (corners.every(Boolean)) {
-    L.polygon(corners, { color: '#BA0C2F', weight: 2, fillOpacity: 0.08, dashArray: '6 4' }).addTo(map);
+    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.08, dashArray: '6 4' }).addTo(map);
   }
-  const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#001489', weight: 1, fillOpacity: 0.12 });
-  const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#001489', fillOpacity: 1 });
+  const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
+  const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
   positionMap = { map, dot, accuracy, follow: true, trackLine: null, remove: () => map.remove() };
   drawTrackOnMap();
@@ -1628,7 +1628,7 @@ function applyTheme() {
   }
 
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', '#001489');
+  if (meta) meta.setAttribute('content', '#1c2632');
 
   document.body.classList.toggle('finger-draw', !!(state && state.settings.fingerDraw));
 }
@@ -4374,7 +4374,7 @@ function preloadPdfLogo() {
 function pdfHeader(doc, title, subtitle, rightLines) {
   const W = doc.internal.pageSize.getWidth();
   const M = 36;
-  const navy = [0, 20, 137];   // CAP Ultramarine Blue
+  const navy = [18, 63, 110];
 
   if (pdfLogoData) {
     try { doc.addImage(pdfLogoData, 'PNG', M, 28, 40, 40); } catch (_) { /* ignore */ }
@@ -4413,7 +4413,7 @@ function buildPdfBlob() {
   const H = doc.internal.pageSize.getHeight();
   const M = 36;
   const CW = W - M * 2;
-  const navy = [0, 20, 137];   // CAP Ultramarine Blue
+  const navy = [18, 63, 110];
   const grey = [92, 106, 118];
   const dark = [30, 40, 50];
   const log = activeLog();
