@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.13.2';
+const APP_VERSION = '1.14.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -333,8 +333,152 @@ const Native = NATIVE ? {
   Geolocation: registerNativePlugin('Geolocation'),
   Share: registerNativePlugin('Share'),
   Filesystem: registerNativePlugin('Filesystem'),
-  Keyboard: registerNativePlugin('Keyboard')
+  Keyboard: registerNativePlugin('Keyboard'),
+  App: registerNativePlugin('App'),
+  Haptics: registerNativePlugin('Haptics'),
+  LocalNotifications: registerNativePlugin('LocalNotifications'),
+  StatusBar: registerNativePlugin('StatusBar'),
+  SplashScreen: registerNativePlugin('SplashScreen'),
+  // our own Swift plugin in ios/App/App/MissionLogPlugin.swift
+  MissionLog: registerNativePlugin('MissionLog')
 } : null;
+
+// A short tap felt in the hand: a checkpoint or reading was recorded.
+function haptic(style) {
+  if (!NATIVE) return;
+  Native.Haptics.impact({ style: style || 'MEDIUM' }).catch(() => {});
+}
+
+/* ---------- OPS check reminder ----------
+   A notification at the next OPS check time, so it reaches the crew while
+   ForeFlight is on screen or the iPad is locked. Only while the sortie is
+   running: after Engine Start, before Shut Down. */
+const OPS_NOTIFICATION_ID = 3001;
+let opsPermissionAsked = false;
+
+function opsReminderDue(log) {
+  const l = log || activeLog();
+  if (!sortieReady(l) || !l.times.engineStart.time || l.times.shutDown.time) return null;
+  const due = nextOpsDue(l) || (isValidTime(l.times.engineStart.time)
+    ? addMinutes(l.times.engineStart.time, state.settings.opsInterval || 30) : '');
+  const at = utcDateNear(due);
+  return at && at.getTime() > Date.now() + 5000 ? at : null;
+}
+
+// An HHMM Zulu time as the nearest actual moment (within 12 hours of now).
+function utcDateNear(hhmm) {
+  if (!isValidTime(hhmm)) return null;
+  const now = new Date();
+  const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+    Number(hhmm.slice(0, 2)), Number(hhmm.slice(2, 4))));
+  if (at.getTime() < now.getTime() - 12 * 3600000) at.setUTCDate(at.getUTCDate() + 1);
+  if (at.getTime() > now.getTime() + 12 * 3600000) at.setUTCDate(at.getUTCDate() - 1);
+  return at;
+}
+
+/* ---------- Live Activity ----------
+   From Engine Start to Shut Down the Lock Screen and Dynamic Island show the
+   sortie: phase, time since wheels up, the next OPS check and the CAP grid. */
+let sortieActivityOn = false;
+let lastActivityGrid = '';
+
+function sortiePhase(t) {
+  if (t.wheelsDown.time) return 'Landed';
+  if (t.outOfArea.time) return 'Returning';
+  if (t.inArea.time) return 'In search area';
+  if (t.wheelsUp.time) return 'Airborne';
+  return 'Engine running';
+}
+
+function syncSortieActivity() {
+  if (!NATIVE || !state) return;
+  const log = activeLog();
+  const t = log.times;
+  const running = sortieReady(log) && isValidTime(t.engineStart.time) && !t.shutDown.time;
+  if (!running) {
+    if (sortieActivityOn) Native.MissionLog.endSortieActivity().catch(() => {});
+    sortieActivityOn = false;
+    return;
+  }
+  const fix = freshFix();
+  const grid = fix ? capGridName(fix.lat, fix.lon) : '';
+  lastActivityGrid = grid;
+  const airborne = t.wheelsUp.time && !t.wheelsDown.time ? utcDateNear(t.wheelsUp.time) : null;
+  const ops = opsReminderDue(log);
+  Native.MissionLog.updateSortieActivity({
+    mission: log.mission || '',
+    sortie: sortieLabel(log, missionSorties(log).indexOf(log)),
+    callsign: log.callsign || '',
+    phase: sortiePhase(t),
+    airborneSince: airborne ? airborne.getTime() : 0,
+    nextOpsDue: ops ? ops.getTime() : 0,
+    grid
+  }).then(result => { sortieActivityOn = !!(result && result.running); }).catch(() => {});
+}
+
+async function scheduleOpsReminder() {
+  if (!NATIVE || !state) return;
+  try {
+    await Native.LocalNotifications.cancel({ notifications: [{ id: OPS_NOTIFICATION_ID }] });
+    const at = opsReminderDue();
+    if (!at) return;
+    let perm = await Native.LocalNotifications.checkPermissions();
+    if (perm.display !== 'granted' && !opsPermissionAsked) {
+      opsPermissionAsked = true;
+      perm = await Native.LocalNotifications.requestPermissions();
+    }
+    if (perm.display !== 'granted') return;
+    const log = activeLog();
+    await Native.LocalNotifications.schedule({ notifications: [{
+      id: OPS_NOTIFICATION_ID,
+      title: 'OPS check due',
+      body: (log.callsign ? log.callsign + ' · ' : '') + 'Report OPS normal, fuel and altimeter.',
+      schedule: { at, allowWhileIdle: true },
+      sound: 'default'
+    }] });
+  } catch (err) {
+    console.warn('OPS reminder not scheduled', err);
+  }
+}
+
+/* ---------- files opened from other apps ----------
+   ForeFlight's Send To and AirDrop can hand Mission Log a flight plan (.fpl),
+   a shared sortie or a backup (.json). */
+async function openSharedFile(url) {
+  try {
+    const name = decodeURIComponent(String(url).split('/').pop() || 'file');
+    const read = await Native.Filesystem.readFile({ path: url, encoding: 'utf8' });
+    const text = typeof read.data === 'string' ? read.data : await read.data.text();
+    if (/\.fpl$/i.test(name) || /<flight-plan/i.test(text.slice(0, 600))) {
+      if (!sortieReady()) {
+        toast('Create the mission and a sortie first, then open the flight plan again');
+        return;
+      }
+      if (activeTab !== 'plan') switchTab('plan');
+      const parsed = parseFplWaypoints(text);
+      fplImport = { name, points: parsed.points, rule: parsed.rule };
+      fplImportSheet();
+    } else {
+      importBackupText(text);
+    }
+  } catch (err) {
+    console.warn('could not open shared file', err);
+    toast('Could not open that file');
+  }
+}
+
+// Native set-up that needs the app to be running: status bar, keyboard bar,
+// splash screen, and files handed over by other apps.
+function startNative() {
+  if (!NATIVE) return;
+  Native.StatusBar.setStyle({ style: 'DARK' }).catch(() => {});     // light text on the navy header
+  Native.Keyboard.setAccessoryBarVisible({ isVisible: true }).catch(() => {});   // previous / next / Done
+  Native.App.addListener('appUrlOpen', event => { if (event && event.url) openSharedFile(event.url); });
+  Native.App.getLaunchUrl().then(launch => { if (launch && launch.url) openSharedFile(launch.url); }).catch(() => {});
+  setTimeout(() => Native.SplashScreen.hide().catch(() => {}), 150);
+  scheduleOpsReminder();
+  syncSortieActivity();
+}
 
 /* While the on-screen keyboard is up, the tab bar steps aside so it does not
    ride up over the form. The app is told by the keyboard plugin; a browser is
@@ -468,6 +612,7 @@ function startGpsWatch() {
       };
       gpsState = 'on';
       renderGpsChip();
+      if (sortieActivityOn && capGridName(lastGpsFix.lat, lastGpsFix.lon) !== lastActivityGrid) syncSortieActivity();
     },
     error => {
       if (error && error.code === 1) {
@@ -1108,6 +1253,8 @@ function setSaveStatus(kind, text) {
   if (label) label.textContent = text;
 }
 
+let opsReminderTimer = null;
+
 function save() {
   if (!state) return;
   state.updatedAt = Date.now();
@@ -1129,6 +1276,10 @@ function save() {
       saveInFlight = false;
     }
   }, 420);
+  if (NATIVE) {
+    clearTimeout(opsReminderTimer);
+    opsReminderTimer = setTimeout(() => { scheduleOpsReminder(); syncSortieActivity(); }, 1500);
+  }
 }
 
 /* ---------- theme / wake lock ---------- */
@@ -1157,6 +1308,10 @@ function applyTheme() {
 }
 
 async function syncWakeLock() {
+  if (NATIVE) {
+    Native.MissionLog.setKeepAwake({ enabled: !!(state && state.settings.keepAwake) }).catch(() => {});
+    return;
+  }
   const wanted = !!(state && state.settings.keepAwake);
   if (!wanted) {
     if (wakeLock) {
@@ -1714,7 +1869,7 @@ function planView(log) {
       <div class="crew-list">
         ${crew.map((m, i) => `<div class="crew-row">
           <select class="input" data-bind="crew.${i}.role" aria-label="Role">
-            ${CREW_ROLES.map(([key, label]) => `<option value="${key}" ${m.role === key ? 'selected' : ''}>${key} · ${esc(label)}</option>`).join('')}
+            ${CREW_ROLES.map(([key, label]) => `<option value="${key}" ${m.role === key ? 'selected' : ''} title="${esc(label)}">${key}</option>`).join('')}
           </select>
           <input class="input" data-bind="crew.${i}.name" value="${esc(m.name)}" placeholder="Name" autocapitalize="characters" aria-label="Name">
           <input class="input mono" data-bind="crew.${i}.capid" value="${esc(m.capid)}" placeholder="CAPID" inputmode="numeric" aria-label="CAPID">
@@ -3164,7 +3319,7 @@ function menuSheet() {
 
 function settingsSheet() {
   const settings = state.settings;
-  const wakeSupported = 'wakeLock' in navigator;
+  const wakeSupported = NATIVE || 'wakeLock' in navigator;
   const gpsSupported = geoAvailable();
 
   openSheet({
@@ -3335,6 +3490,7 @@ function quickLog(kind, label) {
   save();
   render();
   if (!fix && state.settings.gpsLive) autoGpsEntry(entry);
+  haptic('MEDIUM');
   if (state.settings.hobbsPrompt) hobbsSheet(entry.id);
   toast(label + ' logged at ' + fmtZ(entry.time), 'Undo', () => {
     log.entries = log.entries.filter(e => e.id !== entry.id);
@@ -3390,8 +3546,10 @@ function addOpsCheck() {
     normal: true
   };
   log.ops.push(op);
+  haptic('MEDIUM');
   save();
   render();
+  scheduleOpsReminder();
   toast('OPS check recorded at ' + fmtZ(op.time), 'Undo', () => {
     log.ops = log.ops.filter(o => o.id !== op.id);
     save();
@@ -3700,6 +3858,63 @@ function exportCSV() {
   toast('CSV ready');
 }
 
+// Apply a backup or a shared sortie, from the file picker or a file opened in the app.
+function importBackupText(text) {
+  const data = JSON.parse(text);
+  let incoming = null;
+
+  if (data && Array.isArray(data.logs)) incoming = data.logs;
+  else if (data && Array.isArray(data.entries)) incoming = [data];
+
+  if (!incoming || !incoming.length) throw new Error('No logs found in that file');
+
+  const shared = data && data.kind === 'sortie';
+  const replacing = incoming.filter(raw => raw && state.logs.some(l => l.id === raw.id)).length;
+  if (replacing && !confirm(replacing === 1 && shared
+    ? 'This sortie is already on this iPad. Replace it with the copy in the file? Changes made here since it was shared will be lost.'
+    : replacing + ' of these sorties are already on this iPad and will be replaced by the copies in the file. Continue?')) return;
+
+  let added = 0;
+  let lastId = null;
+  incoming.forEach(raw => {
+    const log = normalizeLog(raw);
+    if (!log.missionId || !state.logs.some(l => l.missionId === log.missionId)) {
+      // join a mission here with the same number, if there is one
+      const key = String(log.mission || '').trim().toUpperCase();
+      const match = key && state.logs.find(l => String(l.mission || '').trim().toUpperCase() === key);
+      log.missionId = match ? match.missionId : (log.missionId || uid());
+    }
+    if (shared && !state.logs.some(l => l.id === log.id)) {
+      // a crew member's sortie: theirs to read, yours to sign
+      log.receivedFrom = data.from || 'a crew member';
+      const mine = state.logs.find(l => l.missionId === log.missionId);
+      log.signoff = { name: mine ? mine.signoff.name : '', capid: mine ? mine.signoff.capid : '', dateTime: '', signature: '' };
+    }
+    lastId = log.id;
+    const index = state.logs.findIndex(l => l.id === log.id);
+    if (index >= 0) {
+      state.logs[index] = log;
+    } else {
+      state.logs.push(log);
+      added++;
+    }
+  });
+
+  if (shared && lastId) {
+    state.activeId = lastId;
+    activeTab = defaultTab();
+  }
+  if (data.settings) {
+    const { termsAccepted, termsAcceptedAt } = state.settings;
+    state.settings = Object.assign(state.settings, data.settings, { termsAccepted, termsAcceptedAt });
+  }
+  save();
+  applyTheme();
+  render();
+  toast('Imported ' + incoming.length + ' log' + (incoming.length === 1 ? '' : 's') +
+    (added ? ' (' + added + ' new)' : ''));
+}
+
 function importJSON() {
   const input = document.createElement('input');
   input.type = 'file';
@@ -3714,60 +3929,7 @@ function importJSON() {
     input.remove();
     if (!file) return;
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      let incoming = null;
-
-      if (data && Array.isArray(data.logs)) incoming = data.logs;
-      else if (data && Array.isArray(data.entries)) incoming = [data];
-
-      if (!incoming || !incoming.length) throw new Error('No logs found in that file');
-
-      const shared = data && data.kind === 'sortie';
-      const replacing = incoming.filter(raw => raw && state.logs.some(l => l.id === raw.id)).length;
-      if (replacing && !confirm(replacing === 1 && shared
-        ? 'This sortie is already on this iPad. Replace it with the copy in the file? Changes made here since it was shared will be lost.'
-        : replacing + ' of these sorties are already on this iPad and will be replaced by the copies in the file. Continue?')) return;
-
-      let added = 0;
-      let lastId = null;
-      incoming.forEach(raw => {
-        const log = normalizeLog(raw);
-        if (!log.missionId || !state.logs.some(l => l.missionId === log.missionId)) {
-          // join a mission here with the same number, if there is one
-          const key = String(log.mission || '').trim().toUpperCase();
-          const match = key && state.logs.find(l => String(l.mission || '').trim().toUpperCase() === key);
-          log.missionId = match ? match.missionId : (log.missionId || uid());
-        }
-        if (shared && !state.logs.some(l => l.id === log.id)) {
-          // a crew member's sortie: theirs to read, yours to sign
-          log.receivedFrom = data.from || 'a crew member';
-          const mine = state.logs.find(l => l.missionId === log.missionId);
-          log.signoff = { name: mine ? mine.signoff.name : '', capid: mine ? mine.signoff.capid : '', dateTime: '', signature: '' };
-        }
-        lastId = log.id;
-        const index = state.logs.findIndex(l => l.id === log.id);
-        if (index >= 0) {
-          state.logs[index] = log;
-        } else {
-          state.logs.push(log);
-          added++;
-        }
-      });
-
-      if (shared && lastId) {
-        state.activeId = lastId;
-        activeTab = defaultTab();
-      }
-      if (data.settings) {
-        const { termsAccepted, termsAcceptedAt } = state.settings;
-        state.settings = Object.assign(state.settings, data.settings, { termsAccepted, termsAcceptedAt });
-      }
-      save();
-      applyTheme();
-      render();
-      toast('Imported ' + incoming.length + ' log' + (incoming.length === 1 ? '' : 's') +
-        (added ? ' (' + added + ' new)' : ''));
+      importBackupText(await file.text());
     } catch (err) {
       console.warn(err);
       toast('Could not import that file');
@@ -5460,6 +5622,7 @@ async function boot() {
 
   preloadPdfLogo();
   syncWakeLock();
+  startNative();
 
   if (state.settings.gpsLive) startGpsWatch(); else renderGpsChip();
   setInterval(renderGpsChip, 5000);   // a fix that stops arriving turns to GPS lost

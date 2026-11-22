@@ -113,6 +113,30 @@ npm run sync         # copy the web files into www/ and update the Xcode project
 npm run open         # open ios/App in Xcode, then build and run on a simulator or iPad
 ```
 
+### Native features
+
+- **OPS check reminder:** a local notification at the next OPS check time while the sortie is running
+  (after Engine Start, before Shut Down), so it reaches the crew in ForeFlight or on the Lock Screen.
+- **Haptics** when a checkpoint or OPS check is recorded; **keep screen awake** through
+  `ios/App/App/MissionLogPlugin.swift`; light **status bar** text; **launch screen** with the logo;
+  the keyboard's previous / next / Done bar; the app resizes above the keyboard.
+- **Open in Mission Log:** `.fpl` flight plans (ForeFlight → Send To) fill the search area, and `.json`
+  backups or shared sorties (AirDrop, Files) import directly.
+- **Live Activity:** from Engine Start to Shut Down the Lock Screen shows the phase, time since wheels up,
+  the next OPS check and the CAP grid. The app side is in `MissionLogPlugin.swift` and
+  `SortieActivityAttributes.swift`; the widget is `ios/App/SortieActivity/SortieActivityWidget.swift`,
+  which needs a Widget Extension target (see below).
+
+### Adding the Live Activity widget target (once, in Xcode)
+
+1. File → New → Target… → **Widget Extension**. Product name `SortieActivity`; tick **Include Live
+   Activity**; untick Configuration App Intent. Activate the scheme if asked.
+2. Delete the Swift files Xcode generated in the new `SortieActivity` group, then drag
+   `ios/App/SortieActivity/SortieActivityWidget.swift` into that group (target: SortieActivity only).
+3. Select `App/SortieActivityAttributes.swift`; in the File inspector tick both **App** and
+   **SortieActivity** under Target Membership.
+4. Set the SortieActivity target's iOS deployment target to 16.2 and its signing team to yours.
+
 Run `npm run sync` after every change to `index.html`, `app.js`, `styles.css`, `icons/` or `vendor/`.
 App ID: `io.missionlog.app`. Location, camera and photo permission texts are in
 `ios/App/App/Info.plist`.

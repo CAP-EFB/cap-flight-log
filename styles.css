@@ -214,6 +214,8 @@ h1, h2, h3, p { margin: 0; }
 .gps-chip[data-level="warn"] .gps-icon { color: var(--amber); }
 .gps-chip[data-level="bad"] .gps-icon { color: var(--red); }
 @media (max-width: 700px) { .gps-pos { display: none; } }
+/* Slide Over and narrow Split View: just the satellite icon, coloured by fix quality */
+@media (max-width: 440px) { #gpsLabel, .gps-grid { display: none; } }
 
 /* the header logo: airplane and wordmark in one image */
 .brand-logo { display: block; width: auto; height: 46px; }
@@ -821,7 +823,7 @@ select.input {
 .crew-list { display: flex; flex-direction: column; gap: 8px; }
 .crew-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) 2fr 120px 30px;
+  grid-template-columns: 84px 2fr 120px 30px;
   gap: 7px;
   align-items: center;
 }
