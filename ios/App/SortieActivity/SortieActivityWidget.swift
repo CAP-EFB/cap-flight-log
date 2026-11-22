@@ -12,8 +12,9 @@ struct SortieActivityBundle: WidgetBundle {
     }
 }
 
-private let navy = Color(red: 0.11, green: 0.15, blue: 0.20)
-private let amber = Color(red: 0.95, green: 0.74, blue: 0.42)
+private let navy = Color(red: 20 / 255, green: 28 / 255, blue: 51 / 255)
+// CAP Air Force Yellow
+private let amber = Color(red: 1, green: 205 / 255, blue: 0)
 
 struct SortieActivityWidget: Widget {
     var body: some WidgetConfiguration {
