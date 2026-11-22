@@ -8,31 +8,26 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 ## What it does
 
+The tabs follow a sortie from briefing to signature: **Plan → Fly → Notes → Debrief → Sign**.
+
 - **Missions and sorties** — a mission holds one or more sorties. The header's sortie switcher (or
   Menu → + Sortie) starts the next sortie with the same crew, aircraft, frequencies and search area;
   mission number, base, mission date and your name and CAPID are shared by every sortie.
-- **Mission details** — mission, sortie, aircraft, callsign, base, CAP flight, sectional, grid,
-  altitude/airspeed, crew and radios.
-- **Checkpoints** — Engine Start, Wheels Up, In Area, On Target, Out of Area, Wheels Down,
-  Shut Down and Custom entries. Each tap stamps the current UTC time and carries Hobbs and
-  the last position forward. A large keypad then asks for the Hobbs reading (switch it off in Settings).
-- **GPS** — Use the iPad's location to fill entry/exit points, log entries and observations.
-  **Live GPS** (on by default, Settings to switch off) shows fix status and accuracy in the header and
-  starts checkpoints, new entries and observations at the current position. Accuracy is stored and
-  shown on the entry.
-- **Times** — the six flight times, computed flight time, engine run, tach and Hobbs used.
-  Engine Start and Shut Down ask for both Hobbs and tach. The Sign tab shows Hobbs and tach end, start and
-  total, with Hobbs split into In Area and To/From as the WMIRS debrief wants.
-- **OPS status** — 30-minute checks with time, Hobbs, fuel, altimeter and an OPS-normal flag,
-  plus a next-due reminder on the log tab.
-- **Notes & sketch** — free text plus a graph-paper canvas that works with Apple Pencil or a
-  finger, with undo and red/black pens.
-- **Observations** — time, Hobbs, position and free text, with optional GPS and up to six camera/library photos per observation.
-- **SAR** — the SAR results worksheet (CAPF 104a): search area, corners and entry/exit points, search plan versus
-  actual, probability of detection, search times, and crew remarks. Adds a worksheet page to the PDF and
-  printout when anything is entered. The search-area corners can be filled from a ForeFlight FPL file
-  (Send To → Share FPL File → Save to Files → Import from ForeFlight).
-- **Sign-off** — its own Sign tab: printed name, CAPID, UTC date/time and a signature pad.
+- **Plan** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
+  ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a), frequencies and nav aids.
+- **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
+  Start and Shut Down), the flight log, observations with up to six photos each, and OPS checks with a
+  next-due reminder.
+- **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
+- **Debrief** — flight times and totals, Hobbs and tach end/start/total with Hobbs split into In Area and
+  To/From, the actual column of the SAR worksheet, effectiveness, visibility and crew remarks.
+- **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
+- **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header. Switch Live GPS
+  off in Settings to save battery.
+- **Send sortie to crew** — Menu → Send sortie to crew (or the header's sortie switcher) shares only the
+  current sortie by AirDrop, Messages or Mail. The crew member saves it to Files and uses Menu → Import
+  backup; it joins their copy of the mission (matched by mission number) as its own sortie, with the
+  sign-off left for them to complete.
 - **Output** — Print / Save PDF. On iPad this builds a PDF and opens the share sheet (Save to Files or
   Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
 - **Disclaimer & terms** — shown on first use and must be accepted to continue; available afterwards

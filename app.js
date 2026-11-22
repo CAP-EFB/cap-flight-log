@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -582,7 +582,7 @@ function autoGpsEntry(entry) {
       entry.gpsAccuracy = Math.round(fix.accuracy);
       entry.gpsTime = fmtZ(hhmmFromMs(fix.at));
       save();
-      if (activeTab === 'log' && !$('#overlay').classList.contains('show')) renderWhenIdle();
+      if (activeTab === 'fly' && !$('#overlay').classList.contains('show')) renderWhenIdle();
     })
     .catch(reportGpsError);
 }
@@ -591,7 +591,7 @@ function autoGpsObservation(obs) {
   requestGps(false)
     .then(fix => {
       const index = activeLog().observations.indexOf(obs);
-      const card = activeTab === 'obs' ? $$('.obs')[index] : null;
+      const card = activeTab === 'fly' ? $$('.obs')[index] : null;
       applyGpsToObservation(obs, fix, card || null);
       save();
     })
@@ -601,7 +601,7 @@ function autoGpsObservation(obs) {
 /* ---------- state ---------- */
 
 let state = null;
-let activeTab = 'log';
+let activeTab = 'fly';
 let sheetOnClose = null;
 let sketchCtl = null;
 let sigCtl = null;
@@ -788,6 +788,7 @@ function normalizeLog(raw) {
   const log = Object.assign(base, raw || {});
   log.id = (raw && raw.id) || base.id;
   log.missionId = (raw && raw.missionId) || '';   // filled in by assignMissionIds
+  log.receivedFrom = (raw && raw.receivedFrom) || '';
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
   TIME_DEFS.forEach(def => {
     log.times[def.key] = Object.assign({ time: '', hobbs: '' }, log.times[def.key] || {});
@@ -1185,11 +1186,11 @@ function render() {
   if (!view) return;
   const log = activeLog();
 
-  if (activeTab === 'log') view.innerHTML = logView(log);
-  else if (activeTab === 'times') view.innerHTML = timesView(log);
-  else if (activeTab === 'obs') view.innerHTML = obsView(log);
+  if (!TABS.includes(activeTab)) activeTab = defaultTab(log);
+  if (activeTab === 'plan') view.innerHTML = planView(log);
+  else if (activeTab === 'fly') view.innerHTML = flyView(log);
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
-  else if (activeTab === 'sar') view.innerHTML = sarView(log);
+  else if (activeTab === 'debrief') view.innerHTML = debriefView(log);
   else if (activeTab === 'sign') view.innerHTML = signView(log);
 
   updateOutputs();
@@ -1201,7 +1202,7 @@ function render() {
   if (activeTab === 'notes') {
     autoGrowAll();
   }
-  if (activeTab === 'obs' || activeTab === 'sar') {
+  if (activeTab === 'fly' || activeTab === 'plan' || activeTab === 'debrief') {
     autoGrowAll();
   }
 }
@@ -1209,7 +1210,7 @@ function render() {
 function opsBanner(log) {
   const last = log.ops[log.ops.length - 1];
   if (!last) {
-    return `<button class="status-banner none" data-act="tab" data-tab="times">
+    return `<button class="status-banner none" data-act="goto-ops">
       <span class="sb-dot"></span>
       <span>No OPS checks yet — <strong>record the first one</strong></span>
     </button>`;
@@ -1222,13 +1223,13 @@ function opsBanner(log) {
   const overdue = live && since > interval + 4;
 
   if (overdue) {
-    return `<button class="status-banner due" data-act="tab" data-tab="times">
+    return `<button class="status-banner due" data-act="goto-ops">
       <span class="sb-dot"></span>
       <span><strong>OPS check due</strong> — last was ${fmtZ(last.time)} (${fmtDuration(since)} ago)</span>
     </button>`;
   }
 
-  return `<button class="status-banner ok" data-act="tab" data-tab="times">
+  return `<button class="status-banner ok" data-act="goto-ops">
     <span class="sb-dot"></span>
     <span><strong>OPS ${last.normal ? 'normal' : 'flagged'}</strong> at ${fmtZ(last.time)}${next ? ' · next ' + fmtZ(next) : ''} · ${log.ops.length} check${log.ops.length === 1 ? '' : 's'}</span>
   </button>`;
@@ -1308,7 +1309,7 @@ function tachCardHTML(log) {
         <div class="total"><div class="tl">Hobbs in area</div><div class="tv" id="meter-hobbs-area">${one(totals.hobbsArea)}</div></div>
         <div class="total"><div class="tl">Hobbs to / from</div><div class="tv" id="meter-hobbs-tofrom">${one(totals.hobbsToFrom)}</div></div>
       </div>
-      <div class="sketch-hint">Hobbs comes from the checkpoints; correct it on the Times tab. In area is Out of Area minus In Area, and to / from is the rest, so the two add up to the total. On G1000 aircraft the tach reading is ENG HOURS.</div>
+      <div class="sketch-hint">Hobbs comes from the checkpoints; correct it under Flight times above. In area is Out of Area minus In Area, and to / from is the rest, so the two add up to the total. On G1000 aircraft the tach reading is ENG HOURS.</div>
     </section>`;
 }
 
@@ -1321,11 +1322,11 @@ let installPromptEvent = null;
 window.addEventListener('beforeinstallprompt', event => {
   event.preventDefault();
   installPromptEvent = event;
-  if (state && activeTab === 'log') renderWhenIdle();
+  if (state && activeTab === 'fly') renderWhenIdle();
 });
 window.addEventListener('appinstalled', () => {
   installPromptEvent = null;
-  if (state && activeTab === 'log') renderWhenIdle();
+  if (state && activeTab === 'fly') renderWhenIdle();
 });
 
 const SHARE_ICON = '<svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Share"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
@@ -1352,7 +1353,34 @@ function installBannerHTML() {
     </div>`;
 }
 
-function logView(log) {
+/* ---------- tabs, in the order of a sortie ----------
+   Plan (briefing) → Fly (in the aircraft) → Notes → Debrief (after landing) → Sign. */
+
+const TABS = ['plan', 'fly', 'notes', 'debrief', 'sign'];
+
+// Where a sortie opens: Plan until it has a mission number, then Fly.
+function defaultTab(log) {
+  return (log || activeLog()).mission ? 'fly' : 'plan';
+}
+
+function opsCardHTML(log) {
+  const ops = log.ops.map((op, i) => opsRowHTML(log, op, i)).reverse().join('');
+  return `<section class="card" id="ops-card">
+      <div class="card-head">
+        <div class="head-left"><h2>OPS status</h2><span class="count-badge">${log.ops.length}</span></div>
+        <button class="btn small primary" data-act="ops-add">+ Record check</button>
+      </div>
+      <div class="note-strip" style="margin-top:0;margin-bottom:12px">
+        Every ${state.settings.opsInterval || 30} minutes${nextOpsDue(log) ? ' · next due ' + fmtZ(nextOpsDue(log)) : ''}. Fuel and altimeter carry forward from the previous check.
+      </div>
+      <div class="ops-list">
+        ${ops || '<div class="empty"><strong>No OPS checks</strong>Tap “Record check” every 30 minutes.</div>'}
+      </div>
+    </section>`;
+}
+
+function flyView(log) {
+  const obsList = log.observations.map((obs, i) => obsCardHTML(log, obs, i)).join('');
   return `<div class="stack">
     ${installBannerHTML()}
     ${opsBanner(log)}
@@ -1374,6 +1402,205 @@ function logView(log) {
         <button class="btn small" data-act="add-entry">+ Entry</button>
       </div>
       ${entriesHTML(log)}
+    </section>
+    <section class="card" id="obs-card">
+      <div class="card-head">
+        <div class="head-left"><h2>Observations</h2><span class="count-badge">${log.observations.length}</span></div>
+        <button class="btn small primary" data-act="add-obs">+ New</button>
+      </div>
+      ${obsList || `<div class="empty"><strong>No observations yet</strong>Tap “New” after each sighting. Time, Hobbs and position are filled in for you.</div>`}
+    </section>
+    ${opsCardHTML(log)}
+  </div>`;
+}
+
+// One column of the CAPF 104a plan-versus-actual grid: planned on Plan, actual on Debrief.
+function sarColumnHTML(log, column) {
+  const values = log.sar[column];
+  const text = ([key, label, opts]) => field(label, textInput('sar.' + column + '.' + key, values[key], opts));
+  const choice = ([key, label, options]) => `<div class="field span-2"><span>${esc(label)}</span>${sarChoice('sar.' + column + '.' + key, values[key], options)}</div>`;
+  return `<div class="form-grid">
+      ${SAR_TEXT_ROWS.map(text).join('')}
+      ${SAR_CHOICE_ROWS.map(choice).join('')}
+      ${SAR_RESULT_ROWS.map(text).join('')}
+    </div>`;
+}
+
+function planView(log) {
+  const crew = log.crew;
+  const sar = log.sar;
+  const navRows = log.navAids.map((nav, i) => `<div class="nav-row">
+    <span class="num">${i + 1}</span>
+    <input class="input" data-bind="navAids.${i}.ident" value="${esc(nav.ident)}" placeholder="Identifier" autocapitalize="characters" aria-label="Nav aid ${i + 1} identifier">
+    <input class="input mono" data-bind="navAids.${i}.freq" value="${esc(nav.freq)}" placeholder="Frequency" inputmode="decimal" aria-label="Nav aid ${i + 1} frequency">
+    <input class="input mono radial" data-bind="navAids.${i}.radial" value="${esc(nav.radial)}" placeholder="Radial" inputmode="numeric" aria-label="Nav aid ${i + 1} radial">
+    <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
+  </div>`).join('');
+
+  return `<div class="stack">
+    <section class="card" id="mission-card">
+      <div class="card-head">
+        <div class="head-left"><h2>Mission</h2></div>
+        <span class="muted small">Shared by every sortie</span>
+      </div>
+      <div class="form-grid">
+        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }))}
+        <label class="field"><span>Mission date</span>
+          <div class="input-btn">
+            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
+            <button type="button" class="mini" data-act="sar-today">Today</button>
+          </div>
+        </label>
+        ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Sortie</h2></div>
+        <span class="muted small">This sortie only</span>
+      </div>
+      <div class="form-grid">
+        ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
+        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters', placeholder: log.sortie ? 'Sortie ' + log.sortie : 'Sortie number' }))}
+        ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
+        ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
+        ${field('CAP flight', textInput('capFlight', log.capFlight, { placeholder: 'NC-123' }))}
+      </div>
+      <div class="subhead">Crew</div>
+      <div class="form-grid">
+        ${field('Pilot', textInput('crew.pilot', crew.pilot, { autocap: 'characters' }))}
+        ${field('Observer', textInput('crew.observer', crew.observer, { autocap: 'characters' }))}
+        ${field('AP', textInput('crew.ap', crew.ap, { autocap: 'characters' }))}
+        ${field('Scanner', textInput('crew.scanner', crew.scanner, { autocap: 'characters' }))}
+        ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
+        ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Flight profile</h2></div></div>
+      <div class="form-grid">
+        ${field('Sectional', textInput('sectional', log.sectional, { placeholder: 'Charlotte' }))}
+        ${field('Altitude', textInput('altitude', log.altitude, { placeholder: '3500' }))}
+        ${field('Airspeed', textInput('airspeed', log.airspeed, { placeholder: '110' }))}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Search area</h2></div>
+        <button class="btn small" data-act="sar-import-fpl">Import from ForeFlight</button>
+      </div>
+      <div class="note-strip" style="margin-top:0;margin-bottom:12px">
+        To fill the corners from a ForeFlight search pattern: in ForeFlight open the flight plan, tap Edit, Send To, Share FPL File and save it to Files, then import that file here.
+      </div>
+      <div class="form-grid">
+        ${field('Name', textInput('sar.areaName', sar.areaName))}
+        ${field('Grid', textInput('grid', log.grid, { className: 'mono', autocap: 'characters' }))}
+      </div>
+      ${SAR_CORNERS.map(([key, label]) => `
+        <div class="subhead">${esc(label)} corner</div>
+        <div class="form-grid">
+          ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
+          ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
+        </div>`).join('')}
+      <div class="subhead">Entry point</div>
+      <div class="form-grid">
+        ${coordField('Latitude', 'entry.lat', log.entry.lat, true)}
+        ${coordField('Longitude', 'entry.lon', log.entry.lon, false)}
+      </div>
+      <div class="gps-row">
+        <button type="button" class="mini" data-act="copy-entry">Copy to exit</button>
+      </div>
+      <div class="subhead">Exit point</div>
+      <div class="form-grid">
+        ${coordField('Latitude', 'exit.lat', log.exit.lat, true)}
+        ${coordField('Longitude', 'exit.lon', log.exit.lon, false)}
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn small" data-act="sar-clear-corners">Clear corners</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Search plan</h2></div>
+        <span class="muted small">CAPF 104a · planned</span>
+      </div>
+      ${sarColumnHTML(log, 'planned')}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Frequencies</h2></div></div>
+      <div class="form-grid">
+        <label class="field"><span>Main</span><input class="input mono" data-bind="radio.main" value="${esc(log.radio.main)}" placeholder="e.g. 123.45"></label>
+        <label class="field"><span>Guard</span><input class="input mono" data-bind="radio.guard" value="${esc(log.radio.guard)}" placeholder="121.5"></label>
+        <label class="field"><span>ATIS / AWOS</span><input class="input mono" data-bind="radio.atis" value="${esc(log.radio.atis)}"></label>
+        <label class="field"><span>CTAF</span><input class="input mono" data-bind="radio.ctaf" value="${esc(log.radio.ctaf)}"></label>
+        <label class="field"><span>Unicom</span><input class="input mono" data-bind="radio.unicom" value="${esc(log.radio.unicom)}"></label>
+        <label class="field"><span>Other</span><input class="input mono" data-bind="radio.other" value="${esc(log.radio.other)}"></label>
+      </div>
+      <div class="subhead">Standard</div>
+      <div class="freq-list">
+        ${STANDARD_FREQS.map(([label, value]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(value)}</span></div>`).join('')}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Nav aids</h2></div>
+        <button class="btn small" data-act="add-navaid">+ Row</button>
+      </div>
+      <div class="nav-grid">${navRows}</div>
+    </section>
+  </div>`;
+}
+
+function debriefView(log) {
+  const totals = timeTotals(log);
+  const sar = log.sar;
+  const rating = (label, key) => `
+      <div class="sar-rating">
+        <div class="sar-label">${esc(label)}</div>
+        ${sarChoice('sar.' + key, sar[key], SAR_RATINGS)}
+        <span class="sar-score-label">Score</span>
+        ${sarChoice('sar.' + key + 'Score', sar[key + 'Score'], SAR_SCORES)}
+      </div>`;
+  return `<div class="stack">
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Flight times</h2></div>
+        <span class="muted small">UTC</span>
+      </div>
+      ${TIME_DEFS.map(def => timeRowHTML(log, def)).join('')}
+      <div class="totals">
+        <div class="total"><div class="tl">Wheels up → down</div><div class="tv" id="tot-flight">${fmtDuration(totals.flight)}</div></div>
+        <div class="total"><div class="tl">Engine start → shut</div><div class="tv" id="tot-engine">${fmtDuration(totals.engine)}</div></div>
+        <div class="total"><div class="tl">Tach</div><div class="tv" id="tot-tach">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
+        <div class="total"><div class="tl">Hobbs used</div><div class="tv" id="tot-hobbs">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
+      </div>
+      <div class="note-strip">Correct the checkpoint times and Hobbs here. Editing a time also updates the matching entry in the flight log.</div>
+    </section>
+
+    ${tachCardHTML(log)}
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Search results</h2></div>
+        <span class="muted small">CAPF 104a · actual</span>
+      </div>
+      ${sarColumnHTML(log, 'actual')}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Crew remarks &amp; notes</h2></div></div>
+      ${rating('Effectiveness', 'effectiveness')}
+      ${rating('Visibility', 'visibility')}
+      <label class="field" style="margin-top:14px"><span>Written comments</span>
+        <textarea class="input obs-text" data-bind="sar.comments" data-autogrow
+          placeholder="Anything bearing on the results: observer tied up on the radio, a scanner unwell in turbulence, areas not covered.">${esc(sar.comments)}</textarea>
+      </label>
     </section>
   </div>`;
 }
@@ -1418,72 +1645,6 @@ function opsRowHTML(log, op, index) {
   </div>`;
 }
 
-function timesView(log) {
-  const totals = timeTotals(log);
-  const ops = log.ops.map((op, i) => opsRowHTML(log, op, i)).reverse().join('');
-  const navRows = log.navAids.map((nav, i) => `<div class="nav-row">
-    <span class="num">${i + 1}</span>
-    <input class="input" data-bind="navAids.${i}.ident" value="${esc(nav.ident)}" placeholder="Identifier" autocapitalize="characters" aria-label="Nav aid ${i + 1} identifier">
-    <input class="input mono" data-bind="navAids.${i}.freq" value="${esc(nav.freq)}" placeholder="Frequency" inputmode="decimal" aria-label="Nav aid ${i + 1} frequency">
-    <input class="input mono radial" data-bind="navAids.${i}.radial" value="${esc(nav.radial)}" placeholder="Radial" inputmode="numeric" aria-label="Nav aid ${i + 1} radial">
-    <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
-  </div>`).join('');
-
-  return `<div class="stack">
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Flight times</h2></div>
-        <span class="muted small">UTC</span>
-      </div>
-      ${TIME_DEFS.map(def => timeRowHTML(log, def)).join('')}
-      <div class="totals">
-        <div class="total"><div class="tl">Wheels up → down</div><div class="tv" id="tot-flight">${fmtDuration(totals.flight)}</div></div>
-        <div class="total"><div class="tl">Engine start → shut</div><div class="tv" id="tot-engine">${fmtDuration(totals.engine)}</div></div>
-        <div class="total"><div class="tl">Tach</div><div class="tv" id="tot-tach">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
-        <div class="total"><div class="tl">Hobbs used</div><div class="tv" id="tot-hobbs">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
-      </div>
-      <div class="note-strip">The Now buttons stamp the current UTC time. Editing a time also updates the matching checkpoint in the flight log.</div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>OPS status</h2><span class="count-badge">${log.ops.length}</span></div>
-        <button class="btn small primary" data-act="ops-add">+ Record check</button>
-      </div>
-      <div class="note-strip" style="margin-top:0;margin-bottom:12px">
-        Every ${state.settings.opsInterval || 30} minutes${nextOpsDue(log) ? ' · next due ' + fmtZ(nextOpsDue(log)) : ''}. Fuel and altimeter carry forward from the previous check.
-      </div>
-      <div class="ops-list">
-        ${ops || '<div class="empty"><strong>No OPS checks</strong>Tap “Record check” every 30 minutes.</div>'}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Nav aids</h2></div>
-        <button class="btn small" data-act="add-navaid">+ Row</button>
-      </div>
-      <div class="nav-grid">${navRows}</div>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Frequencies</h2></div></div>
-      <div class="form-grid">
-        <label class="field"><span>Main</span><input class="input mono" data-bind="radio.main" value="${esc(log.radio.main)}" placeholder="e.g. 123.45"></label>
-        <label class="field"><span>Guard</span><input class="input mono" data-bind="radio.guard" value="${esc(log.radio.guard)}" placeholder="121.5"></label>
-        <label class="field"><span>ATIS / AWOS</span><input class="input mono" data-bind="radio.atis" value="${esc(log.radio.atis)}"></label>
-        <label class="field"><span>CTAF</span><input class="input mono" data-bind="radio.ctaf" value="${esc(log.radio.ctaf)}"></label>
-        <label class="field"><span>Unicom</span><input class="input mono" data-bind="radio.unicom" value="${esc(log.radio.unicom)}"></label>
-        <label class="field"><span>Other</span><input class="input mono" data-bind="radio.other" value="${esc(log.radio.other)}"></label>
-      </div>
-      <div class="subhead">Standard</div>
-      <div class="freq-list">
-        ${STANDARD_FREQS.map(([label, value]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(value)}</span></div>`).join('')}
-      </div>
-    </section>
-  </div>`;
-}
-
 function obsCardHTML(log, obs, index) {
   const photos = Array.isArray(obs.photos) ? obs.photos : [];
   return `<article class="obs">
@@ -1525,131 +1686,10 @@ function obsCardHTML(log, obs, index) {
   </article>`;
 }
 
-function obsView(log) {
-  const list = log.observations.map((obs, i) => obsCardHTML(log, obs, i)).join('');
-  return `<div class="stack">
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Observations</h2><span class="count-badge">${log.observations.length}</span></div>
-        <button class="btn small primary" data-act="add-obs">+ New</button>
-      </div>
-      ${list || `<div class="empty"><strong>No observations yet</strong>Tap “New” after each sighting. Time, Hobbs and position are filled in for you.</div>`}
-    </section>
-  </div>`;
-}
-
 function sarChoice(path, value, options) {
   return `<div class="seg wrap" data-choice="${esc(path)}">${options.map(option =>
     `<button type="button" data-act="sar-choice" data-value="${esc(option)}" class="${value === option ? 'active' : ''}">${esc(option)}</button>`
   ).join('')}</div>`;
-}
-
-function sarView(log) {
-  const sar = log.sar;
-  const textRow = ([key, label, opts]) => `
-      <div class="sar-label">${esc(label)}</div>
-      <div data-col="Planned">${textInput('sar.planned.' + key, sar.planned[key], opts)}</div>
-      <div data-col="Actual">${textInput('sar.actual.' + key, sar.actual[key], opts)}</div>`;
-  const choiceRow = ([key, label, options]) => `
-      <div class="sar-label">${esc(label)}</div>
-      <div data-col="Planned">${sarChoice('sar.planned.' + key, sar.planned[key], options)}</div>
-      <div data-col="Actual">${sarChoice('sar.actual.' + key, sar.actual[key], options)}</div>`;
-  const rating = (label, key) => `
-      <div class="sar-rating">
-        <div class="sar-label">${esc(label)}</div>
-        ${sarChoice('sar.' + key, sar[key], SAR_RATINGS)}
-        <span class="sar-score-label">Score</span>
-        ${sarChoice('sar.' + key + 'Score', sar[key + 'Score'], SAR_SCORES)}
-      </div>`;
-
-  return `<div class="stack">
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>SAR results worksheet</h2></div>
-        <span class="muted small">CAPF 104a</span>
-      </div>
-      <div class="form-grid">
-        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters', placeholder: log.sortie ? 'Sortie ' + log.sortie : 'Sortie number' }))}
-        ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters' }))}
-        <label class="field"><span>Mission date</span>
-          <div class="input-btn">
-            ${textInput('sar.missionDate', sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
-            <button type="button" class="mini" data-act="sar-today">Today</button>
-          </div>
-        </label>
-        ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
-        ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Search area</h2></div>
-        <button class="btn small" data-act="sar-import-fpl">Import from ForeFlight</button>
-      </div>
-      <div class="note-strip" style="margin-top:0;margin-bottom:12px">
-        To fill the corners from a ForeFlight search pattern: in ForeFlight open the flight plan, tap Edit, Send To, Share FPL File and save it to Files, then import that file here.
-      </div>
-      <div class="form-grid">
-        ${field('Name', textInput('sar.areaName', sar.areaName))}
-        ${field('Grid', textInput('grid', log.grid, { className: 'mono', autocap: 'characters' }))}
-      </div>
-      ${SAR_CORNERS.map(([key, label]) => `
-        <div class="subhead">${esc(label)} corner</div>
-        <div class="form-grid">
-          ${coordField('Latitude', 'sar.corners.' + key + '.lat', sar.corners[key].lat, true)}
-          ${coordField('Longitude', 'sar.corners.' + key + '.lon', sar.corners[key].lon, false)}
-        </div>`).join('')}
-        <div class="subhead">Entry point</div>
-        <div class="form-grid">
-          ${coordField('Latitude', 'entry.lat', log.entry.lat, true)}
-          ${coordField('Longitude', 'entry.lon', log.entry.lon, false)}
-        </div>
-        <div class="gps-row">
-          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="entry">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-            Use current position
-          </button>
-          <button type="button" class="mini" data-act="copy-entry">Copy to exit</button>
-          <span class="gps-status" id="gps-mission-entry-status"></span>
-        </div>
-        <div class="subhead">Exit point</div>
-        <div class="form-grid">
-          ${coordField('Latitude', 'exit.lat', log.exit.lat, true)}
-          ${coordField('Longitude', 'exit.lon', log.exit.lon, false)}
-        </div>
-        <div class="gps-row">
-          <button type="button" class="mini gps-mini" data-act="gps-mission" data-target="exit">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>
-            Use current position
-          </button>
-          <span class="gps-status" id="gps-mission-exit-status"></span>
-        </div>
-      <div class="btn-row" style="margin-top:12px">
-        <button class="btn small" data-act="sar-clear-corners">Clear corners</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Search plan versus actual</h2></div></div>
-      <div class="sar-grid">
-        <div class="sar-head"></div><div class="sar-head">Planned</div><div class="sar-head">Actual</div>
-        ${SAR_TEXT_ROWS.map(textRow).join('')}
-        ${SAR_CHOICE_ROWS.map(choiceRow).join('')}
-        ${SAR_RESULT_ROWS.map(textRow).join('')}
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Crew remarks &amp; notes</h2></div></div>
-      ${rating('Effectiveness', 'effectiveness')}
-      ${rating('Visibility', 'visibility')}
-      <label class="field" style="margin-top:14px"><span>Written comments</span>
-        <textarea class="input obs-text" data-bind="sar.comments" data-autogrow
-          placeholder="Anything bearing on the results: observer tied up on the radio, a scanner unwell in turbulence, areas not covered.">${esc(sar.comments)}</textarea>
-      </label>
-    </section>
-  </div>`;
 }
 
 /* ---------- ForeFlight search area import ---------- */
@@ -1771,7 +1811,7 @@ function fplImportSheet() {
 }
 
 function signView(log) {
-  return `<div class="stack">${tachCardHTML(log)}<section class="card">
+  return `<div class="stack"><section class="card">
     <div class="card-head">
       <div class="head-left"><h2>Sign-off</h2></div>
       <button class="btn small" data-act="sign-now">Now (UTC)</button>
@@ -2449,7 +2489,7 @@ function addObservationPhoto(obsId) {
       const photo = await fileToPhoto(file);
       obs.photos.push(photo);
       save();
-      if (activeTab === 'obs') render();
+      if (activeTab === 'fly') render();
       toast('Photo added');
     } catch (err) {
       console.warn('photo import failed', err);
@@ -2492,65 +2532,6 @@ function deleteObservationPhoto(obsId, photoId) {
     obs.photos.splice(index, 0, removed);
     save();
     render();
-  });
-}
-
-function missionSheet() {
-  const log = activeLog();
-  const crew = log.crew;
-  const radio = log.radio;
-  openSheet({
-    title: 'Mission details',
-    sub: 'Mission number and base are shared by every sortie; the rest is this sortie only',
-    body: `
-      <div class="sheet-section">
-        <h3>Mission</h3>
-        <div class="form-grid">
-          ${field('Mission number', textInput('mission', log.mission, { placeholder: 'e.g. 24-001' }))}
-          ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
-          ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
-          ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
-          ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
-          ${field('CAP flight', textInput('capFlight', log.capFlight, { placeholder: 'NC-123' }))}
-        </div>
-      </div>
-
-      <div class="sheet-section">
-        <h3>Flight profile</h3>
-        <div class="form-grid">
-          ${field('Sectional', textInput('sectional', log.sectional, { placeholder: 'Charlotte' }))}
-          ${field('Grid', textInput('grid', log.grid, { placeholder: '17S' }))}
-          ${field('Altitude', textInput('altitude', log.altitude, { placeholder: '3500' }))}
-          ${field('Airspeed', textInput('airspeed', log.airspeed, { placeholder: '110' }))}
-        </div>
-      </div>
-
-      <div class="sheet-section">
-        <h3>Crew</h3>
-        <div class="form-grid">
-          ${field('Pilot', textInput('crew.pilot', crew.pilot, { autocap: 'characters' }))}
-          ${field('Observer', textInput('crew.observer', crew.observer, { autocap: 'characters' }))}
-          ${field('AP', textInput('crew.ap', crew.ap, { autocap: 'characters' }))}
-          ${field('Scanner', textInput('crew.scanner', crew.scanner, { autocap: 'characters' }))}
-        </div>
-      </div>
-
-      <div class="sheet-section">
-        <h3>Radios</h3>
-        <div class="form-grid">
-          ${field('Main', textInput('radio.main', radio.main, { className: 'mono', inputmode: 'decimal' }))}
-          ${field('Guard', textInput('radio.guard', radio.guard, { className: 'mono', inputmode: 'decimal' }))}
-          ${field('ATIS / AWOS', textInput('radio.atis', radio.atis, { className: 'mono', inputmode: 'decimal' }))}
-          ${field('CTAF', textInput('radio.ctaf', radio.ctaf, { className: 'mono', inputmode: 'decimal' }))}
-          ${field('Unicom', textInput('radio.unicom', radio.unicom, { className: 'mono', inputmode: 'decimal' }))}
-          ${field('Other', textInput('radio.other', radio.other, { className: 'mono', inputmode: 'decimal' }))}
-        </div>
-      </div>
-
-      <div class="sheet-note">Coordinates are kept as degrees and decimal minutes (N 35° 30.00′). Type 35 30.00, 3530.00 or decimal degrees; north and west are assumed unless you add S or E.</div>
-    `,
-    footer: `<button type="button" class="btn primary" data-close>Done</button>`,
-    onClose: () => render()
   });
 }
 
@@ -2898,6 +2879,10 @@ function menuSheet() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
             <span>Export backup<span class="mi-sub">All logs as a .json file</span></span>
           </button>
+          <button type="button" class="menu-item" data-act="send-sortie">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>
+            <span>Send sortie to crew<span class="mi-sub">This sortie only, by AirDrop, Messages or Mail</span></span>
+          </button>
           <button type="button" class="menu-item" data-act="import-json">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>
             <span>Import backup<span class="mi-sub">Merge a .json backup into this device</span></span>
@@ -2955,7 +2940,7 @@ function settingsSheet() {
       </div>
 
       <div class="setting-row">
-        <div class="setting-label">OPS interval<small>Reminder rhythm on the log tab</small></div>
+        <div class="setting-label">OPS interval<small>Reminder rhythm on the Fly tab</small></div>
         <div class="input-btn" style="width:132px">
           <input class="input mono centered" id="ops-interval" data-bind="settings.opsInterval" inputmode="numeric" value="${esc(settings.opsInterval)}">
           <span class="muted small">min</span>
@@ -3025,7 +3010,7 @@ function helpSheet() {
             <span><strong>Checkpoint buttons</strong><span class="mi-sub">Tap Engine Start, Wheels Up, In Area, etc. The time is stamped and a keypad asks for Hobbs, starting from the last reading. Engine Start and Shut Down also ask for tach. Tap the checkpoint again to edit it.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>OPS rhythm</strong><span class="mi-sub">Record a check every 30 minutes. Fuel and altimeter carry forward; the log tab warns you when one is due.</span></span>
+            <span><strong>OPS rhythm</strong><span class="mi-sub">Record a check every 30 minutes. Fuel and altimeter carry forward; the Fly tab warns you when one is due.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>Positions</strong><span class="mi-sub">Stored as degrees and decimal minutes (N 35° 30.00′). Type them that way, as decimal degrees (35.5) or as degrees, minutes and seconds (35 30 00); the line under each field shows the other formats. New entries start at your last position.</span></span>
@@ -3132,9 +3117,7 @@ function addObservation() {
   };
   log.observations.push(obs);
   save();
-  if (activeTab !== 'obs') {
-    activeTab = 'obs';
-  }
+  activeTab = 'fly';
   render();
   if (state.settings.gpsLive) autoGpsObservation(obs);
   requestAnimationFrame(() => {
@@ -3175,7 +3158,7 @@ function switchLog(id) {
   if (!state.logs.some(l => l.id === id)) return;
   state.activeId = id;
   closeSheet();
-  activeTab = 'log';
+  activeTab = defaultTab();
   save();
   render();
   window.scrollTo(0, 0);
@@ -3241,7 +3224,7 @@ function createLog() {
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
-  activeTab = 'log';
+  activeTab = defaultTab();
   save();
   render();
   toast('New mission started');
@@ -3269,7 +3252,7 @@ function addSortie() {
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
-  activeTab = 'log';
+  activeTab = defaultTab();
   save();
   render();
   window.scrollTo(0, 0);
@@ -3289,7 +3272,7 @@ function deleteLog() {
   const sibling = sorties.find(other => other !== log);
   state.activeId = (sibling || state.logs[0]).id;
   closeSheet();
-  activeTab = 'log';
+  activeTab = defaultTab();
   save();
   render();
   toast(sorties.length > 1 ? 'Sortie deleted' : 'Mission deleted');
@@ -3299,7 +3282,7 @@ function sortieRowHTML(l, index) {
   const start = l.times.engineStart.time ? fmtZ(l.times.engineStart.time) : 'not started';
   return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
     <span class="log-name">${esc(sortieLabel(l, index))}</span>
-    <span class="log-meta">${esc(l.aircraft || 'no tail')} · ${esc(start)} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}</span>
+    <span class="log-meta">${esc(l.aircraft || 'no tail')} · ${esc(start)} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
   </button>`;
 }
 
@@ -3315,10 +3298,11 @@ function sortieSheet() {
       <div class="sheet-note">
         + Sortie starts the next sortie of this mission with the same crew, aircraft, frequencies and search
         area. The mission number, base, mission date and your name and CAPID are shared by every sortie.
+        Send to crew shares this sortie by AirDrop; they save it to Files and use Menu → Import backup.
       </div>
     `,
     footer: `<button type="button" class="btn danger left" data-act="del-log">Delete this sortie</button>
-      <button type="button" class="btn" data-close>Done</button>
+      <button type="button" class="btn" data-act="send-sortie">Send to crew</button>
       <button type="button" class="btn primary" data-act="add-sortie">+ Sortie</button>`
   });
 }
@@ -3373,6 +3357,25 @@ function exportJSON() {
   toast('Backup ready');
 }
 
+/* One sortie, to hand to a crew member: share sheet → AirDrop, Messages, Mail.
+   They save it to Files and use Menu → Import, where it joins their copy of
+   the mission as its own sortie. */
+function exportSortie() {
+  const log = activeLog();
+  if (sketchCtl) sketchCtl.flush();
+  const payload = {
+    app: 'Mission Log',
+    kind: 'sortie',
+    version: APP_VERSION,
+    exportedAt: new Date().toISOString(),
+    from: log.signoff.name || log.crew.observer || '',
+    logs: [log]
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  shareFile(exportName('sortie.json'), blob);
+  toast('Sortie ready to send · choose AirDrop in the share sheet');
+}
+
 function csvCell(value) {
   const text = String(value == null ? '' : value);
   if (/[",\n\r]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
@@ -3425,15 +3428,29 @@ function importJSON() {
 
       if (!incoming || !incoming.length) throw new Error('No logs found in that file');
 
+      const shared = data && data.kind === 'sortie';
+      const replacing = incoming.filter(raw => raw && state.logs.some(l => l.id === raw.id)).length;
+      if (replacing && !confirm(replacing === 1 && shared
+        ? 'This sortie is already on this iPad. Replace it with the copy in the file? Changes made here since it was shared will be lost.'
+        : replacing + ' of these sorties are already on this iPad and will be replaced by the copies in the file. Continue?')) return;
+
       let added = 0;
+      let lastId = null;
       incoming.forEach(raw => {
         const log = normalizeLog(raw);
-        if (!log.missionId) {
-          // an old backup: join a mission here with the same number, if there is one
+        if (!log.missionId || !state.logs.some(l => l.missionId === log.missionId)) {
+          // join a mission here with the same number, if there is one
           const key = String(log.mission || '').trim().toUpperCase();
           const match = key && state.logs.find(l => String(l.mission || '').trim().toUpperCase() === key);
-          log.missionId = match ? match.missionId : uid();
+          log.missionId = match ? match.missionId : (log.missionId || uid());
         }
+        if (shared && !state.logs.some(l => l.id === log.id)) {
+          // a crew member's sortie: theirs to read, yours to sign
+          log.receivedFrom = data.from || 'a crew member';
+          const mine = state.logs.find(l => l.missionId === log.missionId);
+          log.signoff = { name: mine ? mine.signoff.name : '', capid: mine ? mine.signoff.capid : '', dateTime: '', signature: '' };
+        }
+        lastId = log.id;
         const index = state.logs.findIndex(l => l.id === log.id);
         if (index >= 0) {
           state.logs[index] = log;
@@ -3443,6 +3460,10 @@ function importJSON() {
         }
       });
 
+      if (shared && lastId) {
+        state.activeId = lastId;
+        activeTab = defaultTab();
+      }
       if (data.settings) {
         const { termsAccepted, termsAcceptedAt } = state.settings;
         state.settings = Object.assign(state.settings, data.settings, { termsAccepted, termsAcceptedAt });
@@ -4057,7 +4078,7 @@ function resetAll() {
   Object.assign(state.settings, { termsAccepted, termsAcceptedAt });   // erasing logs is not un-accepting
   applyTheme();
   closeSheet();
-  activeTab = 'log';
+  activeTab = defaultTab();
   save();
   render();
   toast('All logs erased');
@@ -4361,7 +4382,16 @@ const actions = {
     render();
     toast('Find the steps later under Menu → Help & install');
   },
-  'edit-mission': () => missionSheet(),
+  'edit-mission': () => {
+    switchTab('plan');
+    const number = $('#mission-card [data-bind="mission"]');
+    if (number && !number.value) number.focus();
+  },
+  'goto-ops': () => {
+    if (activeTab !== 'fly') switchTab('fly');
+    const card = $('#ops-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  },
   'quick': el => quickLog(el.dataset.kind, el.dataset.label || 'Log entry'),
   'add-entry': () => openEntrySheet(null),
   'add-checkpoint': () => openEntrySheet(null),
@@ -4450,23 +4480,6 @@ const actions = {
       done();
     }
   },
-  'gps-mission': async el => {
-    const target = el.dataset.target === 'exit' ? 'exit' : 'entry';
-    const latInput = $('[data-bind="' + target + '.lat"]');
-    const lonInput = $('[data-bind="' + target + '.lon"]');
-    const status = $('#gps-mission-' + target + '-status');
-    const done = gpsBusy(el);
-    try {
-      const fix = await requestGps(true);
-      fillCoordPair(latInput, lonInput, fix);
-      if (status) status.textContent = gpsStatusText(fix);
-      toast((target === 'entry' ? 'Entry' : 'Exit') + ' point set from GPS · ±' + Math.round(fix.accuracy) + ' m');
-    } catch (err) {
-      toast(gpsErrorText(err));
-    } finally {
-      done();
-    }
-  },
   'toggle-gps-live': () => {
     state.settings.gpsLive = !state.settings.gpsLive;
     save();
@@ -4539,6 +4552,7 @@ const actions = {
   'switch-log': el => switchLog(el.dataset.id),
   'new-log': () => createLog(),
   'add-sortie': () => addSortie(),
+  'send-sortie': () => exportSortie(),
   'sortie-menu': () => sortieSheet(),
   'del-log': () => deleteLog(),
   'menu': () => menuSheet(),
@@ -4609,7 +4623,7 @@ const actions = {
     toast('Search area corners cleared', 'Undo', () => {
       sar.corners = previous;
       save();
-      if (activeTab === 'sar') render();
+      if (activeTab === 'plan') render();
     });
   },
   'sar-today': () => {
@@ -4669,7 +4683,7 @@ const actions = {
 };
 
 function switchTab(tab) {
-  if (!['log', 'times', 'obs', 'notes', 'sar', 'sign'].includes(tab)) return;
+  if (!TABS.includes(tab)) return;
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
   activeTab = tab;
