@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.5';
+const APP_VERSION = '1.23.6';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2043,11 +2043,12 @@ function renderStrip() {
 
   // Header reads: mission number, then the sortie, its callsign and crew names.
   const any = state.missions.length > 0;
-  main.textContent = mission ? (mission.number || 'Mission') : any ? 'Missions' : 'New Mission';
+  if (mission) main.textContent = mission.number || 'Mission';
+  else main.innerHTML = '<svg class="strip-plus" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>Add Mission';
   // Until a sortie is open, an arrow points at the next step.
   const callout = $('#stripCallout');
   if (callout) callout.hidden = !!log;
-  if (callout) callout.textContent = mission ? 'Add a sortie' : any ? 'Pick a mission' : 'Start Here';
+  if (callout) callout.textContent = mission ? 'Add a sortie' : any ? 'Add a mission' : 'Start Here';
   const sortieBtn = $('#sortieSwitch');
   if (sortieBtn) sortieBtn.hidden = !log;
   if (sortieBtn && log) $('#sortieLabel').textContent = sortieLabel(log, missionSorties(log).indexOf(log));
@@ -5805,11 +5806,8 @@ const actions = {
     render();
     toast('Find the steps later under Menu → Help & install');
   },
-  'edit-mission': () => {
-    // with missions but none picked, the header points at Missions
-    if (!activeMission() && state.missions.length) { switchTab('logbook'); return; }
-    openMissionSheet();
-  },
+  // the header's mission: its details, or Add Mission when none is picked
+  'edit-mission': () => openMissionSheet(),
   'toggle-mission-closed': () => {
     const mission = activeMission();
     if (mission) setMissionClosed(mission, !mission.closed);

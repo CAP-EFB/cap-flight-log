@@ -314,6 +314,8 @@ h1, h2, h3, p { margin: 0; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* "+ Add Mission" while no mission is picked */
+.strip-plus { width: 15px; height: 15px; margin-right: 5px; vertical-align: -2px; }
 .sortie-name {
   flex: none;
   display: inline-flex;
