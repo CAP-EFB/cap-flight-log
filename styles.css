@@ -1806,6 +1806,9 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
 /* on Fly the bottom is the map's controls (and the Hobbs keypad): toasts drop in from the top */
 html.fly-open .toast { bottom: auto; top: calc(var(--page-top, 110px) + 12px); transform: translate(-50%, -14px); }
 html.fly-open .toast.show { transform: translate(-50%, 0); }
+/* on Notes and the sketch pad (PencilKit sits over the page in the app) toasts drop in from the top too */
+html.page-full .toast { bottom: auto; top: calc(var(--page-top, 110px) + 12px); transform: translate(-50%, -14px); }
+html.page-full .toast.show { transform: translate(-50%, 0); }
 .toast button {
   border: 0;
   background: none;

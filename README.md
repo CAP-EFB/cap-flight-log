@@ -38,8 +38,13 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   slides up the timeline of entries and observations (up to six photos each) and the OPS checks with their
   next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
 - **Notes** — free text, the whole page, shrinking above the keyboard.
-- **Sketch** — a sketch pad for a finger or Apple Pencil, the page as large as fits between the header and
-  the tab bar, with a full-screen button. Add as many pages as needed; each page has its own background: grid, plain, or the
+- **Sketch** — a sketch pad, the page as large as fits between the header and the tab bar, with a
+  full-screen button. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
+  lasso, ruler, colours), pressure and tilt, palm rejection (a finger draws unless Only Draw with Apple
+  Pencil is on in iPad Settings), pinch to zoom up to 5×, and Undo/Redo. The page's background zooms under
+  the strokes; each page keeps its PencilKit drawing (to edit again) and a PNG of its ink. Ink from before
+  PencilKit stays under the new strokes. In a browser, Pencil pressure sets the line, strokes are smoothed
+  from every sampled point, and a resting palm is ignored once the Pencil has drawn. Add as many pages as needed; each page has its own background: grid, plain, or the
   FAA sectional, USGS topographic or USGS terrain map around the search area (saved with the page, so it
   shows offline). The eraser removes only ink. Every page with something on it goes in the PDF.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with

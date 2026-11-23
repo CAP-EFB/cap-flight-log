@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.30.0';
+const APP_VERSION = '1.31.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2314,7 +2314,7 @@ function blankRadio() {
 const SKETCH_BACKGROUNDS = [['grid', 'Grid'], ['plain', 'Plain'], ['sectional', 'Sectional'], ['topo', 'Topo'], ['terrain', 'Terrain']];
 
 function blankSketchPage(bg) {
-  return { id: uid(), bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '' };
+  return { id: uid(), bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '' };
 }
 
 function normalizeSketchPages(raw) {
@@ -2325,7 +2325,10 @@ function normalizeSketchPages(raw) {
     map: p.map && Number.isFinite(p.map.lat) && Number.isFinite(p.map.lon) && Number.isFinite(p.map.zoom)
       ? { lat: p.map.lat, lon: p.map.lon, zoom: p.map.zoom } : null,
     ink: safeImage(p.ink),
-    image: safeImage(p.image)
+    image: safeImage(p.image),
+    // the iPad app's PencilKit drawing (base64), and the ink drawn before it
+    pk: typeof p.pk === 'string' && /^[A-Za-z0-9+/=]*$/.test(p.pk) ? p.pk : '',
+    inkBase: safeImage(p.inkBase)
   })) : [];
   // Before 1.24.0 a log had one sketch, saved flat with its grid: it becomes
   // page 1, drawn on as its own background.
@@ -4212,10 +4215,11 @@ function sketchView(log) {
       <div class="card-head">
         <div class="head-left"><h2>Sketch pad</h2></div>
         <div class="sketch-tools">
-          <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
+          ${NATIVE ? '' : `<button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
           <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
-          <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
+          <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>`}
           <button type="button" class="mini" data-act="undo-sketch">Undo</button>
+          ${NATIVE ? '<button type="button" class="mini" data-act="redo-sketch">Redo</button>' : ''}
           <button type="button" class="mini" data-act="clear-sketch">Clear</button>
           <button type="button" class="mini icon-mini" data-act="sketch-fullscreen" aria-label="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}" title="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_ICONS[sketchFullscreen ? 'shrink' : 'expand']}</svg>
@@ -4240,7 +4244,9 @@ function sketchView(log) {
           <canvas id="sketch" width="1000" height="1250" aria-label="Sketch pad, page ${index + 1}"></canvas>
         </div>
       </div>
-      <div class="sketch-hint">Draw with a finger or Apple Pencil. ${CHART_LAYERS[page.bg]
+      <div class="sketch-hint">${NATIVE
+        ? 'Pick pens, marker, pencil, eraser, lasso and ruler in the floating palette; pinch to zoom in. A finger draws unless Only Draw with Apple Pencil is on in iPad Settings.'
+        : 'Draw with a finger or Apple Pencil; Pencil pressure sets the line, and once it draws, a resting palm is ignored.'} ${CHART_LAYERS[page.bg]
         ? 'The map is centred on the search area (or where you were) and kept with this page, so it shows offline. Not for navigation.'
         : 'Sectional, Topo and Terrain put that map around the search area under the drawing; they need a connection the first time.'} Sketches save automatically.</div>
     </section>
@@ -4427,23 +4433,161 @@ async function renderChartImage(view, W, H, layer) {
   return canvas.toDataURL('image/jpeg', 0.85);
 }
 
+/* ---------- the sketch pad in the iPad app: PencilKit ----------
+   The app puts Apple's PencilKit canvas over the page: the tool palette (pens,
+   marker, pencil, eraser, lasso, ruler, colours), pressure and tilt, palm
+   rejection, pinch to zoom, undo and redo. The page's background is drawn here
+   and handed to it to sit under the strokes. Each change comes back as the
+   PencilKit drawing (to edit again) and as a transparent PNG of the ink, which
+   goes into the page's ink and printable image as before. Ink drawn before
+   1.31.0 has no PencilKit drawing: it stays, as part of the background
+   (`inkBase`), and new strokes go over it. */
+let nativeSketchOn = false;
+
+function sketchRect() {
+  const wrap = $('.sketch-stage .canvas-wrap');
+  if (!wrap) return null;
+  const r = wrap.getBoundingClientRect();
+  return { x: r.left, y: r.top, width: r.width, height: r.height };
+}
+
+function loadImg(src) {
+  return new Promise(resolve => {
+    if (!src) { resolve(null); return; }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+// A page's background (and any older ink) as one JPEG, for under the strokes.
+async function sketchUnderlay(page, W, H) {
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d');
+  await paintSketchBackground(ctx, page, W, H);
+  const base = await loadImg(page.inkBase);
+  if (base) ctx.drawImage(base, 0, 0, W, H);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+
+// A change from PencilKit: the page's ink is the older ink with the new strokes over it.
+async function applyNativeSketch(data) {
+  const page = state.logs.flatMap(l => l.sketches).find(p => p.id === data.pageId);
+  if (!page) return;
+  const W = 1000;
+  const H = 1250;
+  page.pk = data.drawing || '';
+  const base = await loadImg(page.inkBase);
+  const ink = await loadImg(data.ink);
+  if (!base && !ink) {
+    page.ink = '';
+  } else {
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext('2d');
+    if (base) ctx.drawImage(base, 0, 0, W, H);
+    if (ink) ctx.drawImage(ink, 0, 0, W, H);
+    page.ink = c.toDataURL('image/png');
+  }
+  // the printable page: background and ink
+  const flat = document.createElement('canvas');
+  flat.width = W;
+  flat.height = H;
+  const fctx = flat.getContext('2d');
+  await paintSketchBackground(fctx, page, W, H);
+  const all = await loadImg(page.ink);
+  if (all) fctx.drawImage(all, 0, 0, W, H);
+  page.image = page.ink || CHART_LAYERS[page.bg] || page.bg === 'image' ? flat.toDataURL('image/jpeg', 0.82) : '';
+  save();
+}
+
+if (NATIVE) {
+  Native.MissionLog.addListener('sketchChanged', data => { applyNativeSketch(data).catch(err => console.warn('sketch', err)); });
+}
+
+function hideNativeSketch() {
+  if (!nativeSketchOn) return;
+  nativeSketchOn = false;
+  Native.MissionLog.sketchHide().catch(() => {});
+}
+
+// Sheets and menus are web content: the canvas steps aside while one is open.
+function nativeSketchVisible(visible) {
+  if (nativeSketchOn) Native.MissionLog.sketchVisible({ visible }).catch(() => {});
+}
+
+function setupNativeSketch(page, W, H) {
+  // ink from before PencilKit becomes the base the new strokes go over
+  if (!page.pk && page.ink && !page.inkBase) {
+    page.inkBase = page.ink;
+    save();
+  }
+  const show = async () => {
+    const rect = sketchRect();
+    if (!rect || activeTab !== 'sketch') return;
+    const background = await sketchUnderlay(page, W, H);
+    if (activeTab !== 'sketch' || currentSketchPage(activeLog()).page !== page) return;
+    nativeSketchOn = true;
+    await Native.MissionLog.sketchShow(Object.assign({ pageId: page.id, drawing: page.pk || '', background }, sketchRect()));
+    if ($('#overlay').classList.contains('show')) nativeSketchVisible(false);
+  };
+  show().catch(err => console.warn('sketch', err));
+  // follow the page on screen: rotation, full screen, the header changing height
+  const wrap = $('.sketch-stage .canvas-wrap');
+  if (wrap && window.ResizeObserver) {
+    new ResizeObserver(() => {
+      const rect = sketchRect();
+      if (rect && nativeSketchOn && activeTab === 'sketch') Native.MissionLog.sketchFrame(rect).catch(() => {});
+    }).observe(wrap);
+  }
+  sketchCtl = {
+    native: true,
+    mode() { return { color: '', eraser: false }; },
+    setColor() {},
+    setEraser() {},
+    undo() { Native.MissionLog.sketchUndo().catch(() => {}); },
+    redo() { Native.MissionLog.sketchRedo().catch(() => {}); },
+    async clear() {
+      page.inkBase = '';
+      page.pk = '';
+      page.ink = '';
+      page.image = CHART_LAYERS[page.bg] || page.bg === 'image' ? page.image : '';
+      save();
+      await Native.MissionLog.sketchClear().catch(() => {});
+      Native.MissionLog.sketchBackground({ background: await sketchUnderlay(page, W, H) }).catch(() => {});
+    },
+    flush() {}
+  };
+  updateToolbarState();
+}
+
 /* The sketch pad (its own tab): two stacked canvases, the page's background under
    and its ink on top. A finger or Apple Pencil draws; the eraser removes ink
    only; Undo steps back through the last strokes on this page. */
 function setupSketch() {
   const canvas = $('#sketch');
   const bgCanvas = $('#sketch-bg');
-  if (!canvas || !bgCanvas) { sketchCtl = null; return; }
+  if (!canvas || !bgCanvas) { sketchCtl = null; if (NATIVE) hideNativeSketch(); return; }
   const ctx = canvas.getContext('2d');
   const bctx = bgCanvas.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
   const log = activeLog();
   const { page } = currentSketchPage(log);
+  if (NATIVE) {
+    // PencilKit draws; the web canvases only show the page until it is up
+    paintSketchBackground(bctx, page, W, H);
+    setupNativeSketch(page, W, H);
+    return;
+  }
 
   let color = (sketchCtl && sketchCtl.mode().color) || '#17222e';
   let eraser = !!(sketchCtl && sketchCtl.mode().eraser);
-  let drawing = false;
+  let drawing = false;   // the pointer drawing the line, or false
   let dirty = false;
   let last = null;
   let saveSketchTimer = null;
@@ -4476,9 +4620,15 @@ function setupSketch() {
     const rect = canvas.getBoundingClientRect();
     return {
       x: (event.clientX - rect.left) * (W / rect.width),
-      y: (event.clientY - rect.top) * (H / rect.height)
+      y: (event.clientY - rect.top) * (H / rect.height),
+      // a pen's pressure thickens the line; a finger or mouse draws at the middle weight
+      w: eraser ? 36 : event.pointerType === 'pen' && event.pressure > 0 ? 1.6 + event.pressure * 6.4 : 5
     };
   }
+
+  // once a pen has drawn, a resting palm (touch) is ignored
+  let penSeen = false;
+  let lastMid = null;
 
   function strokeStyle() {
     ctx.globalCompositeOperation = eraser ? 'destination-out' : 'source-over';
@@ -4506,6 +4656,9 @@ function setupSketch() {
 
   canvas.addEventListener('pointerdown', event => {
     if (event.button != null && event.button !== 0) return;
+    if (event.pointerType === 'pen') penSeen = true;
+    else if (event.pointerType === 'touch' && penSeen) return;
+    if (drawing !== false) return;   // a second finger does not start another line
     event.preventDefault();
     try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* ignore */ }
     try {
@@ -4513,28 +4666,44 @@ function setupSketch() {
       if (undoStack.length > 12) undoStack.shift();
     } catch (_) { /* ignore */ }
     dirty = true;
-    drawing = true;
+    drawing = event.pointerId;
     last = pointFrom(event);
+    lastMid = last;
     strokeStyle();
+    ctx.lineWidth = last.w;
     ctx.beginPath();
     ctx.moveTo(last.x, last.y);
     ctx.lineTo(last.x + 0.01, last.y + 0.01);
     ctx.stroke();
   });
   canvas.addEventListener('pointermove', event => {
-    if (!drawing) return;
+    if (drawing === false || event.pointerId !== drawing) return;
     event.preventDefault();
-    const p = pointFrom(event);
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-    last = p;
+    // every point the screen sampled, joined by curves through the midpoints
+    const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
+    (samples.length ? samples : [event]).forEach(sample => {
+      const p = pointFrom(sample);
+      const mid = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 };
+      ctx.lineWidth = (last.w + p.w) / 2;
+      ctx.beginPath();
+      ctx.moveTo(lastMid.x, lastMid.y);
+      ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y);
+      ctx.stroke();
+      lastMid = mid;
+      last = p;
+    });
   });
   const up = event => {
-    if (!drawing) return;
+    if (drawing === false || event.pointerId !== drawing) return;
+    if (last && lastMid) {
+      ctx.beginPath();
+      ctx.moveTo(lastMid.x, lastMid.y);
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+    }
     drawing = false;
     last = null;
+    lastMid = null;
     try { canvas.releasePointerCapture(event.pointerId); } catch (_) { /* ignore */ }
     scheduleSave();
   };
@@ -4554,6 +4723,7 @@ function setupSketch() {
   });
 
   sketchCtl = {
+    redo() {},
     mode() { return { color, eraser }; },
     setColor(next) { color = next; eraser = false; updateToolbarState(); },
     setEraser() { eraser = true; updateToolbarState(); },
@@ -4768,6 +4938,7 @@ function openSheet(options) {
   </div>`;
   overlay.classList.add('show');
   document.documentElement.classList.add('sheet-open');
+  if (NATIVE) nativeSketchVisible(false);
 }
 
 function closeSheet() {
@@ -4776,6 +4947,7 @@ function closeSheet() {
   overlay.classList.remove('show');
   overlay.innerHTML = '';
   document.documentElement.classList.remove('sheet-open');
+  if (NATIVE && activeTab === 'sketch') nativeSketchVisible(true);
   const callback = sheetOnClose;
   sheetOnClose = null;
   if (typeof callback === 'function') callback();
@@ -7830,6 +8002,9 @@ const actions = {
   },
   'undo-sketch': () => {
     if (sketchCtl) sketchCtl.undo();
+  },
+  'redo-sketch': () => {
+    if (sketchCtl) sketchCtl.redo();
   },
   'clear-sketch': () => {
     if (!confirm('Clear the drawing on this page? Its background stays.')) return;

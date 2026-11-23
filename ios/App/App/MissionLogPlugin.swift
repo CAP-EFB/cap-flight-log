@@ -1,13 +1,15 @@
 import UIKit
 import Capacitor
 import CoreLocation
+import PencilKit
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
 
 /// Mission Log's own native calls, reached from app.js as `MissionLog`:
-/// keeping the screen awake, the flight recorder, and the sortie's Live
-/// Activity on the Lock Screen and in the Dynamic Island.
+/// keeping the screen awake, the flight recorder, the sortie's Live
+/// Activity on the Lock Screen and in the Dynamic Island, and the PencilKit
+/// sketch pad.
 @objc(MissionLogPlugin)
 public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "MissionLogPlugin"
@@ -19,8 +21,78 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startTrack", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopTrack", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readTrack", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "trackStatus", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "trackStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchShow", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchFrame", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchVisible", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchBackground", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchHide", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchUndo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchRedo", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sketchClear", returnType: CAPPluginReturnPromise)
     ]
+
+    // MARK: sketch pad (PencilKit)
+
+    private func rect(_ call: CAPPluginCall) -> CGRect {
+        CGRect(x: call.getDouble("x") ?? 0, y: call.getDouble("y") ?? 0,
+               width: call.getDouble("width") ?? 0, height: call.getDouble("height") ?? 0)
+    }
+
+    /// Puts the PencilKit canvas over the page's place in the web view, with
+    /// the page's background under the strokes and Apple's tool palette.
+    /// The same page again only moves it; another page loads that drawing.
+    @objc func sketchShow(_ call: CAPPluginCall) {
+        let frame = rect(call)
+        let pageId = call.getString("pageId") ?? ""
+        let drawing = call.getString("drawing") ?? ""
+        let background = call.getString("background") ?? ""
+        DispatchQueue.main.async {
+            guard let host = self.bridge?.webView else { call.reject("no web view"); return }
+            SketchPad.shared.plugin = self
+            SketchPad.shared.show(in: host, frame: frame, pageId: pageId, drawing: drawing, background: background)
+            call.resolve()
+        }
+    }
+
+    @objc func sketchFrame(_ call: CAPPluginCall) {
+        let frame = rect(call)
+        DispatchQueue.main.async { SketchPad.shared.setFrame(frame); call.resolve() }
+    }
+
+    /// Hides the canvas for a moment (a sheet over it) without leaving the page.
+    @objc func sketchVisible(_ call: CAPPluginCall) {
+        let visible = call.getBool("visible") ?? true
+        DispatchQueue.main.async { SketchPad.shared.setVisible(visible); call.resolve() }
+    }
+
+    @objc func sketchBackground(_ call: CAPPluginCall) {
+        let background = call.getString("background") ?? ""
+        DispatchQueue.main.async { SketchPad.shared.setBackground(background); call.resolve() }
+    }
+
+    /// Leaving the sketch pad: the last strokes are sent, then the canvas goes.
+    @objc func sketchHide(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { SketchPad.shared.hide(); call.resolve() }
+    }
+
+    @objc func sketchUndo(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { SketchPad.shared.undo(); call.resolve() }
+    }
+
+    @objc func sketchRedo(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { SketchPad.shared.redo(); call.resolve() }
+    }
+
+    @objc func sketchClear(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { SketchPad.shared.clear(); call.resolve() }
+    }
+
+    /// A page's strokes changed: its PencilKit drawing (to edit again) and its
+    /// ink as a transparent 1000 × 1250 PNG (for the PDF and printout).
+    func sketchChanged(pageId: String, drawing: String, ink: String) {
+        notifyListeners("sketchChanged", data: ["pageId": pageId, "drawing": drawing, "ink": ink])
+    }
 
     // MARK: flight recorder
 
@@ -212,6 +284,160 @@ final class TrackRecorder: NSObject, CLLocationManagerDelegate {
         return text.split(separator: "\n").compactMap { line in
             (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [Double]
         }
+    }
+}
+
+/// The sketch pad as PencilKit: a canvas the size of the page (1000 × 1250
+/// points, zoomed to fit its place on screen and pinch-zoomable up to five
+/// times), the page's background in an image view under the strokes, and
+/// Apple's tool picker. Whether a finger draws follows the iPad's own
+/// "Only Draw with Apple Pencil" setting.
+final class SketchPad: NSObject, PKCanvasViewDelegate {
+    static let shared = SketchPad()
+    weak var plugin: MissionLogPlugin?
+    private var canvas: PKCanvasView?
+    private let underlay = UIImageView()
+    private var toolPicker: AnyObject?   // PKToolPicker, iPadOS 14+
+    private var pageId = ""
+    private let page = CGSize(width: 1000, height: 1250)
+    private var pending: DispatchWorkItem?
+    private var loading = false
+    private var fitted = false   // zoomed to fit at least once since this page opened
+
+    private func makeCanvas(in host: UIView) -> PKCanvasView {
+        let view = PKCanvasView(frame: .zero)
+        view.delegate = self
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.contentInsetAdjustmentBehavior = .never
+        view.showsHorizontalScrollIndicator = false
+        view.showsVerticalScrollIndicator = false
+        view.bouncesZoom = true
+        // paper and charts are light: ink keeps its true colours in dark mode
+        view.overrideUserInterfaceStyle = .light
+        view.layer.cornerRadius = 10
+        view.clipsToBounds = true
+        if #available(iOS 14.0, *) { view.drawingPolicy = .default }
+        view.tool = PKInkingTool(.pen, color: UIColor(red: 0.09, green: 0.13, blue: 0.18, alpha: 1), width: 4)
+        underlay.contentMode = .scaleToFill
+        underlay.backgroundColor = .white
+        view.insertSubview(underlay, at: 0)
+        host.addSubview(view)
+        if #available(iOS 14.0, *) {
+            let picker = PKToolPicker()
+            picker.addObserver(view)
+            picker.setVisible(true, forFirstResponder: view)
+            toolPicker = picker
+        }
+        canvas = view
+        return view
+    }
+
+    func show(in host: UIView, frame: CGRect, pageId: String, drawing: String, background: String) {
+        let view = canvas ?? makeCanvas(in: host)
+        if view.superview !== host { host.addSubview(view) }
+        if pageId != self.pageId {
+            flush()
+            self.pageId = pageId
+            loading = true
+            if let data = Data(base64Encoded: drawing), let loaded = try? PKDrawing(data: data) {
+                view.drawing = loaded
+            } else {
+                view.drawing = PKDrawing()
+            }
+            view.undoManager?.removeAllActions()
+            loading = false
+            fitted = false
+        }
+        setBackground(background)
+        setFrame(frame)
+        setVisible(true)
+    }
+
+    func setFrame(_ frame: CGRect) {
+        guard let view = canvas, frame.width > 0, frame.height > 0 else { return }
+        let fit = frame.width / page.width
+        // keep how far in the crew had zoomed when the page moves or resizes
+        let zoom = fitted ? view.zoomScale / max(view.minimumZoomScale, 0.0001) : 1
+        view.frame = frame
+        view.minimumZoomScale = fit
+        view.maximumZoomScale = fit * 5
+        view.zoomScale = min(fit * 5, max(fit, fit * zoom))
+        fitted = true
+        layoutUnderlay()
+    }
+
+    func setBackground(_ dataURL: String) {
+        guard !dataURL.isEmpty else { return }
+        let base64 = dataURL.components(separatedBy: ",").last ?? ""
+        if let data = Data(base64Encoded: base64), let image = UIImage(data: data) {
+            underlay.image = image
+        }
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard let view = canvas else { return }
+        view.isHidden = !visible
+        if visible { view.becomeFirstResponder() } else { view.resignFirstResponder() }
+        if #available(iOS 14.0, *), let picker = toolPicker as? PKToolPicker {
+            picker.setVisible(visible, forFirstResponder: view)
+        }
+    }
+
+    func hide() {
+        flush()
+        setVisible(false)
+        canvas?.removeFromSuperview()
+        pageId = ""
+    }
+
+    func undo() { canvas?.undoManager?.undo() }
+    func redo() { canvas?.undoManager?.redo() }
+    func clear() { canvas?.drawing = PKDrawing() }
+
+    /// The page's size on screen at this zoom: the scroll area, and the background under the strokes.
+    private func layoutUnderlay() {
+        guard let view = canvas else { return }
+        let size = CGSize(width: page.width * view.zoomScale, height: page.height * view.zoomScale)
+        view.contentSize = size
+        underlay.frame = CGRect(origin: .zero, size: size)
+        view.sendSubviewToBack(underlay)
+    }
+
+    // the background follows the strokes as they zoom and scroll
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { layoutUnderlay() }
+
+    func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        guard !loading else { return }
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.send() }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func flush() {
+        guard let work = pending else { return }
+        work.cancel()
+        pending = nil
+        send()
+    }
+
+    private func send() {
+        pending = nil
+        guard let view = canvas, !pageId.isEmpty else { return }
+        let drawing = view.drawing
+        var image = UIImage()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        // rendered in light mode, so black ink stays black in the PDF
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            image = UIGraphicsImageRenderer(size: page, format: format).image { _ in
+                drawing.image(from: CGRect(origin: .zero, size: page), scale: 1).draw(in: CGRect(origin: .zero, size: page))
+            }
+        }
+        let ink = drawing.strokes.isEmpty ? "" : "data:image/png;base64," + (image.pngData()?.base64EncodedString() ?? "")
+        plugin?.sketchChanged(pageId: pageId, drawing: drawing.strokes.isEmpty ? "" : drawing.dataRepresentation().base64EncodedString(), ink: ink)
     }
 }
 
