@@ -21,10 +21,15 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   Sortie Type (the WMIRS list), Tail No., Call Sign, Dep. and Dest. Airport (the next sortie starts from the last one's destination). A mission's next sortie
   copies the crew, frequencies, nav aids and search area from its last one. Brief…Close open once a
   sortie is open.
-- **Brief** — the sortie's WMIRS fields, crew (MP, MO, MS, AP, RO, PAX), Sortie Objectives, Sortie
-  Deliverables and Route Of Flight from the WMIRS brief, flight profile, the search area (corners, entry
-  and exit points, ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a),
-  frequencies (including Air/Ground, Air/Air and base) and nav aids. The aeroplane button goes on to Fly.
+- **Brief** — everything on the CAPF 104 briefing pages: the sortie's WMIRS fields (Sortie Objective, Area
+  of Operations, ETD/ETE), crew (MP, MO, MS, AP, RO, PAX) with each seat's CAPF 104 qualification boxes and
+  the crew contact, the aircraft (type, TAS, colour, owner, fuel, home base, equipment), Sortie Objectives,
+  Deliverables, Actions To Be Taken and Route Of Flight, altitude and airspeed with their restrictions,
+  safety (separation, alternates, MTRs, hazards, other aircraft and ground teams), current and forecast
+  weather, flight plan and risk assessment with special instructions, the briefer and FRO, the search
+  area (corners, entry and exit points, ForeFlight FPL import), offline maps, the planned column of the
+  SAR worksheet (CAPF 104a), frequencies (including Air/Ground, Air/Air, base, base telephone and required
+  radio checks) and nav aids. The aeroplane button goes on to Fly.
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
@@ -44,11 +49,16 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start
   and Shut Down) and the checkpoint times, Hobbs and tach end/start/total with Hobbs In Area and To/From,
   fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
-  (with WMIRS's character limits), Sortie Effectiveness and the reason if not successful. The CAPF 104a
-  actual column and search effectiveness follow.
+  (with WMIRS's character limits), Sortie Effectiveness and the reason if not successful, Wing Paid,
+  attachments and documentation, and the debriefing officer. The CAPF 104a actual column and search
+  effectiveness follow.
 - **Close** — sign the sortie off (printed name, CAPID, UTC date/time and a signature), then Close sortie.
   A closed sortie shows Closed on Missions and can be reopened. Closing a mission's last open sortie
-  offers to close the mission. Share signed log (PDF) is here too.
+  offers to close the mission. Share signed log (PDF) is here too, and **CAPF 104 (PDF)**: the CAP's own
+  fillable form (`vendor/capf104.pdf`) with every field filled in from Missions, Brief, Notes and Debrief by
+  pdf-lib, the layout unchanged and the fields still editable. The bundled blank form is the Dec 21
+  edition with its owner-password encryption removed (it opens without a password and permits form
+  filling), because pdf-lib cannot write to an encrypted file.
 - **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header, once the open
   sortie has its first checkpoint. Switch Live GPS
   off in Settings to save battery.
@@ -119,7 +129,7 @@ etc.) — plain `http://192.168.x.x` will not register the service worker or all
 | `styles.css` | Screen layout, dark mode, print stylesheet |
 | `app.js` | State, storage, GPS, sketch/signature, rendering, PDF builder |
 | `sw.js` | Offline cache (bump `CACHE` when shipping changes) |
-| `vendor/` | Bundled jsPDF + AutoTable for in-app PDF export |
+| `vendor/` | Bundled jsPDF + AutoTable for in-app PDF export; pdf-lib and the blank CAPF 104 for the form |
 | `manifest.webmanifest` | Home-screen metadata |
 | `icons/` | App icons and the header emblem |
 

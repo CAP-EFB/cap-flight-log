@@ -1747,3 +1747,23 @@ body.keyboard-open .fab { display: none; }
 }
 .map-progress span { display: block; height: 100%; background: var(--blue-btn); transition: width .2s; }
 .warn-text { color: var(--amber); }
+
+/* CAPF 104 checkboxes: qualifications, equipment, attachments */
+.crew-item { display: flex; flex-direction: column; gap: 6px; }
+.crew-item + .crew-item { padding-top: 8px; border-top: 1px solid var(--line); }
+.chip-checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-check { position: relative; cursor: pointer; }
+.chip-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.chip-check span {
+  display: inline-block;
+  padding: 6px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--card);
+}
+.chip-check input:checked + span { background: var(--blue-btn); border-color: var(--blue-btn); color: #fff; }
+.chip-check input:focus-visible + span { box-shadow: 0 0 0 3px var(--focus); }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 16px; margin-bottom: 6px; }

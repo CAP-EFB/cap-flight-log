@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.25.0';
+const APP_VERSION = '1.26.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1860,20 +1860,52 @@ function wmirsReport(log) {
   const d = log.debrief;
   const money = value => (String(value || '').trim() ? '$' + String(value).trim().replace(/^\$/, '') : '');
   const reason = d.reason === 'Other' ? d.reasonOther || 'Other' : [d.reason, d.reasonOther].filter(Boolean).join(' - ');
+  const b = log.brief;
+  const a = log.aircraftInfo;
+  const ticked = (items, values, other) => items.filter(([key]) => values[key]).map(([key, label]) =>
+    key === 'other' && other ? 'Other: ' + other : label).join(', ');
+  const who = (name, capid) => [name, capid && 'CAPID ' + capid].filter(Boolean).join(', ');
+  const quals = log.crew.filter(m => qualList(m).length)
+    .map(m => (String(m.name || '').trim() || m.role) + ': ' + qualList(m).join(', ')).join('; ');
+  const flightPlan = [b.fpRequired && 'Required', b.fpFiled && 'Filed', b.fpOpened && 'Opened', d.flightPlanClosed && 'Closed'].filter(Boolean).join(', ');
+  const risk = [b.riskLevel, b.ormComplete && 'ORM matrix complete', b.riskApproval && 'Risk assessment approved'].filter(Boolean).join(', ');
   return [
+    ['Sortie objective', b.objective],
+    ['Area of operations', b.areaOfOps],
+    ['ETD (Z) / ETE', [b.etd && fmtZ(b.etd), b.ete].filter(Boolean).join(' / ')],
+    ['Crew qualifications', quals],
+    ['Crew contact', log.crewContact],
+    ['Aircraft', [a.type, a.color, a.tas && a.tas + ' kt TAS', a.fuelHours && a.fuelHours + ' h fuel', a.homeBase && 'Home ' + a.homeBase, a.owner].filter(Boolean).join(', ')],
+    ['Equipment', ticked(AIRCRAFT_EQUIPMENT, a.equipment, a.equipmentOther)],
+    ['Base telephone', b.basePhone],
+    ['Radio checks & contacts', b.radioChecks],
     ['Sortie objectives', log.objectives],
     ['Sortie deliverables', log.deliverables],
+    ['Actions to be taken', b.actions],
     ['Route of flight', log.route],
-    ['Flight plan closed', d.flightPlanClosed ? 'Yes' : ''],
+    ['Altitude restrictions', b.altitudeRestrictions],
+    ['Airspeed restrictions', b.airspeedRestrictions],
+    ...BRIEF_SAFETY.map(([key, label]) => [label, b[key]]),
+    ['Other aircraft in area', b.otherAircraft],
+    ['Ground teams in area', b.groundTeams],
+    ...BRIEF_WEATHER.map(([key, label]) => ['Weather: ' + label, b.weather[key]]),
+    ['Flight plan', flightPlan],
+    ['Risk assessment', risk],
+    ['Special instructions', b.specialInstructions],
+    ['Briefer', [who(b.briefer, b.brieferCapid), b.phoneBriefing && 'by phone'].filter(Boolean).join(' · ')],
+    ['Flight release officer', who(b.fro, b.froCapid)],
     ['Fuel used (gal)', d.fuelGal],
     ['Oil used (qt)', d.oilQt],
     ['Fuel & oil cost', money(d.fuelCost)],
     ['Receipt #', d.receipt],
+    ['Wing paid', d.wingPaid ? 'Yes' : ''],
     ['Summary', d.summary],
     ['Results/Deliverables', d.results],
     ['Weather conditions', d.weather],
     ['Remarks', d.remarks],
-    ['Sortie effectiveness', [d.effectiveness, d.effectiveness && d.effectiveness !== 'Successful' ? reason : ''].filter(Boolean).join(' - ')]
+    ['Sortie effectiveness', [d.effectiveness, d.effectiveness && d.effectiveness !== 'Successful' ? reason : ''].filter(Boolean).join(' - ')],
+    ['Attachments', ticked(DEBRIEF_ATTACHMENTS, d.attachments, d.attachmentsOther)],
+    ['Debriefer', [who(d.debriefer, d.debrieferCapid), d.debriefedAt, d.phoneDebrief && 'by phone'].filter(Boolean).join(' · ')]
   ].map(([label, value]) => [label, String(value || '').trim()]).filter(([, value]) => value);
 }
 
@@ -1886,7 +1918,16 @@ const CREW_ROLES = [['MP', 'Mission pilot'], ['MO', 'Mission observer'], ['MS', 
 const CREW_ROLE_KEYS = CREW_ROLES.map(([key]) => key);
 
 function crewMember(role) {
-  return { id: uid(), role: role || 'MS', name: '', capid: '' };
+  return { id: uid(), role: role || 'MS', name: '', capid: '', quals: {} };
+}
+
+// The qualification boxes the form gives a crew member in this role.
+function qualsFor(member) {
+  return member.role === 'MP' ? QUALS_PILOT : QUALS_CREW;
+}
+
+function qualList(member) {
+  return qualsFor(member).filter(q => member.quals && member.quals[q]);
 }
 
 // Logs saved before 1.11.0 have one named slot per role; turn them into the list.
@@ -1895,6 +1936,9 @@ function normalizeCrew(raw) {
     return raw.map(m => {
       const member = Object.assign(crewMember(), m || {});
       if (!CREW_ROLE_KEYS.includes(member.role)) member.role = 'MS';
+      const quals = {};
+      Object.keys(QUAL_NAMES).forEach(q => { if (member.quals && member.quals[q] === true) quals[q] = true; });
+      member.quals = quals;
       return member;
     });
   }
@@ -1947,6 +1991,66 @@ const DEBRIEF_TEXT = [
   ['remarks', 'Remarks', 400]
 ];
 
+/* The rest of the CAPF 104 (Dec 21): briefing pages 2 and 3, the manifest's
+   qualifications and aircraft block, and the debrief's attachments and
+   debriefing officers. */
+// Qualification boxes on the manifest: a pilot's, and everyone else's.
+const QUALS_PILOT = ['MP', 'TMP', 'MCP', 'MFC', 'WS', 'COM', 'IFR', 'Night', 'LES', 'Trainee'];
+const QUALS_CREW = ['MO', 'MS', 'AP', 'ADIS', 'HRO', 'WS', 'LES', 'Trainee', 'Other'];
+const QUAL_NAMES = {
+  AP: 'Airborne Photographer', ADIS: 'ADIS', COM: 'Commercial Pilot', HRO: 'High-Bird Radio Operator',
+  IFR: 'Instrument Flight Rated Pilot', LES: 'Law Enforcement Screened (CD Qual.)', MCP: 'Mission Check Pilot',
+  MFC: 'Mountain Flying Certification', MO: 'Mission Observer', MP: 'Mission Pilot', MS: 'Mission Scanner',
+  Night: 'Current to fly at night', TMP: 'Transport Mission Pilot', WS: 'Water Survival', Trainee: 'Trainee', Other: 'Other'
+};
+const AIRCRAFT_EQUIPMENT = [['aeronet', 'AERONet'], ['capFm', 'CAP FM Radio'], ['camera', 'Digital Camera'],
+  ['survivalKit', 'Survival Kit'], ['satPhone', 'Sat Phone'], ['vor', 'VOR'], ['dme', 'DME'], ['autopilot', 'Autopilot'],
+  ['gps', 'GPS'], ['flir', 'FLIR'], ['becker', 'Becker / Rho Theta DF'], ['ltronics', 'L-Tronics DF'],
+  ['repeater', 'Tactical Repeater'], ['lifeRaft', 'Life Raft & Vests'], ['other', 'Other']];
+const AIRCRAFT_OWNERS = ['CAP', 'Member Owned'];
+const DEBRIEF_ATTACHMENTS = [['orm', 'AIF ORM Matrix'], ['recon104b', 'CAPF 104b Recon Summary'],
+  ['ics214', 'ICSF 214 Unit Log'], ['receipts', 'Receipts'], ['sar104a', 'CAPF 104a SAR Results Worksheet'], ['other', 'Other']];
+const BRIEF_WEATHER = [['currentLocal', 'Current Local'], ['currentEnroute', 'Current Enroute'],
+  ['currentArea', 'Current Area of Operations'], ['forecastLocal', 'Forecast Local'],
+  ['forecastEnroute', 'Forecast Enroute'], ['forecastArea', 'Forecast Area of Operations']];
+const RISK_LEVELS = ['Low', 'Moderate', 'High'];
+// Briefing text boxes, in the order of the form: [key, label, limit]
+const BRIEF_SAFETY = [
+  ['separation', 'Aircraft Separation (Adjoining Areas)', 500],
+  ['alternates', 'Emergency / Alternate Fields', 500],
+  ['mtrs', 'Military Low Altitude Training Routes', 500],
+  ['hazards', 'Hazards To Flight', 1000]
+];
+
+function blankBrief() {
+  const weather = {};
+  BRIEF_WEATHER.forEach(([key]) => { weather[key] = ''; });
+  return {
+    objective: '',        // WMIRS Sortie Objective (the one-liner by Sortie Type)
+    areaOfOps: '',        // WMIRS Area of Operations
+    etd: '', ete: '',
+    basePhone: '',
+    radioChecks: '',      // Required Radio Checks & Contacts
+    otherAircraft: '',    // Other Aircraft in Area (Location & Callsign)
+    groundTeams: '',      // Ground Teams in Area (Location & Callsign)
+    actions: '',          // Actions To Be Taken on Objectives & Deliverables
+    altitudeRestrictions: '',
+    airspeedRestrictions: '',
+    separation: '', alternates: '', mtrs: '', hazards: '',
+    weather,
+    fpRequired: false, fpFiled: false, fpOpened: false,
+    ormComplete: false, riskApproval: false, riskLevel: '',
+    specialInstructions: '',
+    briefer: '', brieferCapid: '', fro: '', froCapid: '', phoneBriefing: false
+  };
+}
+
+function blankAircraftInfo() {
+  const equipment = {};
+  AIRCRAFT_EQUIPMENT.forEach(([key]) => { equipment[key] = false; });
+  return { type: '', tas: '', color: '', owner: '', fuelHours: '', homeBase: '', equipment, equipmentOther: '' };
+}
+
 function blankMission() {
   return {
     id: uid(),
@@ -1985,7 +2089,14 @@ function blankDebrief() {
     remarks: '',
     effectiveness: '',
     reason: '',
-    reasonOther: ''
+    reasonOther: '',
+    wingPaid: false,
+    attachments: Object.fromEntries(DEBRIEF_ATTACHMENTS.map(([key]) => [key, false])),
+    attachmentsOther: '',
+    debriefer: '',
+    debrieferCapid: '',
+    debriefedAt: '',
+    phoneDebrief: false
   };
 }
 
@@ -2051,6 +2162,9 @@ function blankLog(missionId) {
     entry: { lat: '', lon: '' },
     exit: { lat: '', lon: '' },
     crew: [crewMember('MP'), crewMember('MO'), crewMember('MS')],
+    crewContact: '',   // Crew Contact (Phone, Email, etc.)
+    brief: blankBrief(),
+    aircraftInfo: blankAircraftInfo(),
     radio: blankRadio(),
     navAids: [
       { ident: '', freq: '', radial: '' },
@@ -2122,6 +2236,20 @@ function normalizeLog(raw) {
   log.closedAt = (raw && Number(raw.closedAt)) || 0;
   log.debrief = Object.assign(blankDebrief(), (raw && raw.debrief) || {});
   log.debrief.flightPlanClosed = log.debrief.flightPlanClosed === true;
+  log.debrief.wingPaid = log.debrief.wingPaid === true;
+  log.debrief.phoneDebrief = log.debrief.phoneDebrief === true;
+  log.debrief.attachments = Object.assign(blankDebrief().attachments, log.debrief.attachments || {});
+  const rawBrief = (raw && raw.brief) || {};
+  log.brief = Object.assign(blankBrief(), rawBrief);
+  log.brief.weather = Object.assign(blankBrief().weather, rawBrief.weather || {});
+  ['fpRequired', 'fpFiled', 'fpOpened', 'ormComplete', 'riskApproval', 'phoneBriefing'].forEach(key => {
+    log.brief[key] = log.brief[key] === true;
+  });
+  if (!RISK_LEVELS.includes(log.brief.riskLevel)) log.brief.riskLevel = '';
+  const rawAircraft = (raw && raw.aircraftInfo) || {};
+  log.aircraftInfo = Object.assign(blankAircraftInfo(), rawAircraft);
+  log.aircraftInfo.equipment = Object.assign(blankAircraftInfo().equipment, rawAircraft.equipment || {});
+  log.crewContact = String(log.crewContact || '');
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
   TIME_DEFS.forEach(def => {
     log.times[def.key] = Object.assign({ time: '', hobbs: '' }, log.times[def.key] || {});
@@ -3125,6 +3253,8 @@ function saveAddSortie() {
     log.fpl = prev.fpl ? deepClone(prev.fpl) : null;
     log.signoff.name = prev.signoff.name;
     log.signoff.capid = prev.signoff.capid;
+    log.crewContact = prev.crewContact;
+    ['basePhone', 'radioChecks', 'separation', 'alternates', 'mtrs', 'hazards', 'areaOfOps'].forEach(key => { log.brief[key] = prev.brief[key]; });
   }
   log.sortie = read('number').toUpperCase();
   log.sortieType = read('type');
@@ -3132,6 +3262,8 @@ function saveAddSortie() {
   log.callsign = read('callsign').toUpperCase();
   log.depAirport = read('dep').toUpperCase();
   log.destAirport = read('dest').toUpperCase();
+  // the same aircraft keeps its type, speed, equipment and the rest
+  if (prev && (!log.aircraft || log.aircraft === prev.aircraft)) log.aircraftInfo = deepClone(prev.aircraftInfo);
   state.logs.push(log);
   state.activeId = log.id;
   closeSheet();
@@ -3218,29 +3350,37 @@ function planView(log) {
       <div class="form-grid">
         ${field('Sortie No.', textInput('sortie', log.sortie, { autocap: 'characters', placeholder: 'A0001' }))}
         ${field('Sortie Type', selectInput('sortieType', log.sortieType, SORTIE_TYPES, 'Sortie Type'))}
+        ${field('Sortie Objective', textInput('brief.objective', log.brief.objective))}
+        ${field('Area of Operations', textInput('brief.areaOfOps', log.brief.areaOfOps))}
         ${field('Tail No.', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N123CP' }))}
         ${field('Call Sign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP1234' }))}
         ${field('Dep. Airport', textInput('depAirport', log.depAirport, { autocap: 'characters', placeholder: 'KBED' }))}
         ${field('Dest. Airport', textInput('destAirport', log.destAirport, { autocap: 'characters', placeholder: 'KBED' }))}
+        ${field('ETD (Z)', textInput('brief.etd', log.brief.etd, { className: 'mono', norm: 'time', inputmode: 'numeric', maxlength: 4, placeholder: 'HHMM' }))}
+        ${field('ETE', textInput('brief.ete', log.brief.ete, { className: 'mono', placeholder: '1+30' }))}
         ${field('Tracking No.', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters' }))}
       </div>
       <div class="subhead">Crew</div>
       <div class="form-grid">
       </div>
       <div class="crew-list">
-        ${crew.map((m, i) => `<div class="crew-row">
-          <select class="input" data-bind="crew.${i}.role" aria-label="Role">
+        ${crew.map((m, i) => `<div class="crew-item"><div class="crew-row">
+          <select class="input" data-bind="crew.${i}.role" data-rerender aria-label="Role">
             ${CREW_ROLES.map(([key, label]) => `<option value="${key}" ${m.role === key ? 'selected' : ''} title="${esc(label)}">${key}</option>`).join('')}
           </select>
           <input class="input" data-bind="crew.${i}.name" value="${esc(m.name)}" placeholder="Name" autocapitalize="characters" aria-label="Name">
           <input class="input mono" data-bind="crew.${i}.capid" value="${esc(m.capid)}" placeholder="CAPID" inputmode="numeric" aria-label="CAPID">
           <button type="button" class="row-del" data-act="del-crew" data-index="${i}" aria-label="Remove crew member">×</button>
+        </div>
+        ${checkChips('crew.' + i + '.quals', qualsFor(m).map(q => [q, q, QUAL_NAMES[q]]), m.quals, 'Qualifications')}
         </div>`).join('') || '<div class="empty"><strong>No crew yet</strong>Add each crew member with the buttons below.</div>'}
       </div>
       <div class="btn-row" style="margin-top:10px">
         ${CREW_ROLE_KEYS.map(role => `<button type="button" class="btn small" data-act="add-crew" data-role="${role}">+ ${role}</button>`).join('')}
       </div>
+      <div class="sketch-hint">Tick the qualifications each seat needs, as on the CAPF 104 manifest.</div>
       <div class="form-grid" style="margin-top:14px">
+        ${field('Crew Contact (Phone, Email, etc.)', textInput('crewContact', log.crewContact), 'span-2')}
         ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
         ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
       </div>
@@ -3256,16 +3396,61 @@ function planView(log) {
       </div>
       ${textAreaField('Sortie Objectives', 'objectives', log.objectives, 1000)}
       ${textAreaField('Sortie Deliverables', 'deliverables', log.deliverables, 1000)}
+      ${textAreaField('Actions To Be Taken on Objectives & Deliverables', 'brief.actions', log.brief.actions, 1000)}
       ${textAreaField('Route Of Flight', 'route', log.route, 1000)}
     </section>
+
+    ${aircraftCardHTML(log)}
 
     <section class="card">
       <div class="card-head"><div class="head-left"><h2>Flight profile</h2></div></div>
       <div class="form-grid">
         ${field('Sectional', textInput('sectional', log.sectional, { placeholder: 'Charlotte' }))}
-        ${field('Altitude', textInput('altitude', log.altitude, { placeholder: '3500' }))}
-        ${field('Airspeed', textInput('airspeed', log.airspeed, { placeholder: '110' }))}
+        ${field('Altitude Assignment', textInput('altitude', log.altitude, { placeholder: '3500' }))}
+        ${field('Airspeed Expected', textInput('airspeed', log.airspeed, { placeholder: '110' }))}
       </div>
+      ${textAreaField('Altitude Restrictions', 'brief.altitudeRestrictions', log.brief.altitudeRestrictions, 500)}
+      ${textAreaField('Airspeed Restrictions', 'brief.airspeedRestrictions', log.brief.airspeedRestrictions, 500)}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Safety</h2></div><span class="muted small">CAPF 104 briefing</span></div>
+      ${BRIEF_SAFETY.map(([key, label, max]) => textAreaField(label, 'brief.' + key, log.brief[key], max)).join('')}
+      ${textAreaField('Other Aircraft in Area (Location & Callsign)', 'brief.otherAircraft', log.brief.otherAircraft, 500)}
+      ${textAreaField('Ground Teams in Area (Location & Callsign)', 'brief.groundTeams', log.brief.groundTeams, 500)}
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Weather</h2></div><span class="muted small">Current &amp; forecast</span></div>
+      <div class="form-grid">
+        ${BRIEF_WEATHER.map(([key, label]) => `<label class="field"><span>${esc(label)}</span>
+          <textarea class="input obs-text" data-bind="brief.weather.${key}" data-autogrow rows="2">${esc(log.brief.weather[key])}</textarea></label>`).join('')}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Flight plan &amp; risk</h2></div></div>
+      <div class="check-grid">
+        ${checkRow('brief.fpRequired', 'Flight Plan Required', log.brief.fpRequired)}
+        ${checkRow('brief.fpFiled', 'Flight Plan Filed', log.brief.fpFiled)}
+        ${checkRow('brief.fpOpened', 'Flight Plan Opened', log.brief.fpOpened)}
+        ${checkRow('brief.ormComplete', 'ORM Matrix Complete', log.brief.ormComplete)}
+        ${checkRow('brief.riskApproval', 'Risk Assessment Approval', log.brief.riskApproval)}
+      </div>
+      <div class="field"><span>Risk Assessment</span>${sarChoice('brief.riskLevel', log.brief.riskLevel, RISK_LEVELS)}</div>
+      <div style="margin-top:12px">${textAreaField('Special Instructions (Including Risk Mitigation Procedures)', 'brief.specialInstructions', log.brief.specialInstructions, 1000)}</div>
+      <div class="sketch-hint">Flight Plan Closed is on Debrief.</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Releasing officers</h2></div></div>
+      <div class="form-grid">
+        ${field('Briefer', textInput('brief.briefer', log.brief.briefer, { placeholder: 'Name' }))}
+        ${field('Briefer CAPID', textInput('brief.brieferCapid', log.brief.brieferCapid, { className: 'mono', inputmode: 'numeric' }))}
+        ${field('Flight Release Officer', textInput('brief.fro', log.brief.fro, { placeholder: 'Name' }))}
+        ${field('FRO CAPID', textInput('brief.froCapid', log.brief.froCapid, { className: 'mono', inputmode: 'numeric' }))}
+      </div>
+      ${checkRow('brief.phoneBriefing', 'Phone briefing', log.brief.phoneBriefing)}
     </section>
 
     <section class="card">
@@ -3330,7 +3515,9 @@ function planView(log) {
         <label class="field"><span>CTAF</span><input class="input mono" data-bind="radio.ctaf" value="${esc(log.radio.ctaf)}"></label>
         <label class="field"><span>Unicom</span><input class="input mono" data-bind="radio.unicom" value="${esc(log.radio.unicom)}"></label>
         <label class="field"><span>Other</span><input class="input mono" data-bind="radio.other" value="${esc(log.radio.other)}"></label>
+        <label class="field"><span>Base Telephone</span><input class="input mono" data-bind="brief.basePhone" value="${esc(log.brief.basePhone)}" inputmode="tel"></label>
       </div>
+      <div style="margin-top:12px">${textAreaField('Required Radio Checks & Contacts', 'brief.radioChecks', log.brief.radioChecks, 500)}</div>
       <div class="subhead">Standard</div>
       <div class="freq-list">
         ${STANDARD_FREQS.map(([label, value]) => `<div class="freq-row"><span class="fl">${esc(label)}</span><span class="fv">${esc(value)}</span></div>`).join('')}
@@ -3351,6 +3538,24 @@ function planView(log) {
 /* Debrief, in the order of the WMIRS Air Sortie Debrief: flight plan closed,
    ATD / ATA, Hobbs and tach, fuel and oil, then the narrative and the sortie's
    effectiveness. The CAPF 104a search results follow. */
+function aircraftCardHTML(log) {
+  const a = log.aircraftInfo;
+  return `<section class="card">
+      <div class="card-head"><div class="head-left"><h2>Aircraft</h2></div><span class="muted small">${esc(log.aircraft || 'Tail No. above')}</span></div>
+      <div class="form-grid">
+        ${field('Type', textInput('aircraftInfo.type', a.type, { autocap: 'characters', placeholder: 'C182T' }))}
+        ${field('TAS (Knots)', textInput('aircraftInfo.tas', a.tas, { className: 'mono', inputmode: 'numeric' }))}
+        ${field('Color / Description', textInput('aircraftInfo.color', a.color))}
+        ${field('Fuel (In Hours)', textInput('aircraftInfo.fuelHours', a.fuelHours, { className: 'mono', inputmode: 'decimal' }))}
+        ${field('Home Base', textInput('aircraftInfo.homeBase', a.homeBase, { autocap: 'characters', placeholder: 'KBED' }))}
+        <div class="field"><span>Owner</span>${sarChoice('aircraftInfo.owner', a.owner, AIRCRAFT_OWNERS)}</div>
+      </div>
+      <div class="subhead">Aircraft &amp; aircrew equipment</div>
+      ${checkChips('aircraftInfo.equipment', AIRCRAFT_EQUIPMENT, a.equipment, 'Aircraft and aircrew equipment')}
+      <div class="form-grid" style="margin-top:10px">${field('Other equipment', textInput('aircraftInfo.equipmentOther', a.equipmentOther))}</div>
+    </section>`;
+}
+
 function debriefView(log) {
   const totals = timeTotals(log);
   const sar = log.sar;
@@ -3392,6 +3597,7 @@ function debriefView(log) {
         ${field('Fuel & Oil Cost ($)', textInput('debrief.fuelCost', d.fuelCost, { className: 'mono', inputmode: 'decimal' }))}
         ${field('Receipt #', textInput('debrief.receipt', d.receipt, { className: 'mono', autocap: 'characters' }))}
       </div>
+      ${checkRow('debrief.wingPaid', 'Wing Paid', d.wingPaid)}
       <div class="sketch-hint">Upload the receipt itself in WMIRS.</div>
     </section>
 
@@ -3407,6 +3613,21 @@ function debriefView(log) {
         ${field('Reason (Other)', textInput('debrief.reasonOther', d.reasonOther))}
       </div>
       <div class="sketch-hint">WMIRS needs Remarks for anything but Successful.</div>
+      <div class="subhead">Attachments &amp; documentation</div>
+      ${checkChips('debrief.attachments', DEBRIEF_ATTACHMENTS, d.attachments, 'Attachments and documentation')}
+      <div class="form-grid" style="margin-top:10px">${field('Other attachment', textInput('debrief.attachmentsOther', d.attachmentsOther))}</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="head-left"><h2>Debriefing officer</h2></div></div>
+      <div class="form-grid">
+        ${field('Debriefer', textInput('debrief.debriefer', d.debriefer, { placeholder: 'Name' }))}
+        ${field('Debriefer CAPID', textInput('debrief.debrieferCapid', d.debrieferCapid, { className: 'mono', inputmode: 'numeric' }))}
+        <label class="field"><span>Time &amp; Date Debriefed</span>
+          <div class="gps-row" style="margin:0"><input class="input mono" data-bind="debrief.debriefedAt" value="${esc(d.debriefedAt)}" placeholder="DD MMM YY HHMMZ" style="flex:1">
+          <button type="button" class="mini" data-act="debriefed-now">Now</button></div></label>
+      </div>
+      ${checkRow('debrief.phoneDebrief', 'Phone debriefing', d.phoneDebrief)}
     </section>
 
     ${trackCardHTML(log)}
@@ -3682,8 +3903,9 @@ function signView(log) {
         </svg>
         Share signed log (PDF)
       </button>
+      <button class="btn" data-act="export-capf104" style="flex:1">CAPF 104 (PDF)</button>
     </div>
-    <div class="sketch-hint">Close the sortie once it is signed and debriefed in WMIRS. Share builds the mission log PDF with this sign-off for AirDrop, Mail, Messages or Save to Files.</div>
+    <div class="sketch-hint">Close the sortie once it is signed and debriefed in WMIRS. Share builds the mission log PDF with this sign-off for AirDrop, Mail, Messages or Save to Files. CAPF 104 fills in the CAP's own form from Brief and Debrief; its fields stay editable.</div>
   </section></div>`;
 }
 
@@ -4397,6 +4619,17 @@ function textAreaField(label, path, value, max, placeholder) {
     <textarea class="input obs-text" data-bind="${esc(path)}" data-autogrow maxlength="${max}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ''}>${esc(value || '')}</textarea></label>`;
 }
 
+// A row of checkboxes drawn as chips, each bound to prefix.key (true/false).
+function checkChips(prefix, items, values, label) {
+  return `<div class="chip-checks" role="group"${label ? ` aria-label="${esc(label)}"` : ''}>${items.map(([key, text, title]) =>
+    `<label class="chip-check"${title ? ` title="${esc(title)}"` : ''}><input type="checkbox" data-bind="${esc(prefix + '.' + key)}" ${values && values[key] ? 'checked' : ''}><span>${esc(text)}</span></label>`
+  ).join('')}</div>`;
+}
+
+function checkRow(path, label, on) {
+  return `<label class="check-row"><input type="checkbox" data-bind="${esc(path)}" ${on ? 'checked' : ''}> ${esc(label)}</label>`;
+}
+
 function updateCharCount(el) {
   const count = el.closest('.text-field') && el.closest('.text-field').querySelector('.char-count');
   if (!count || !(el.maxLength > 0)) return;
@@ -4919,6 +5152,10 @@ function menuSheet() {
           <button type="button" class="menu-item" data-act="print">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
             <span>Print / Save PDF<span class="mi-sub">Two-page mission log, ready for signature</span></span>
+          </button>
+          <button type="button" class="menu-item" data-act="export-capf104">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+            <span>CAPF 104 (PDF)<span class="mi-sub">The sortie on the CAP's own Mission Flight Plan/Briefing form</span></span>
           </button>
           <button type="button" class="menu-item" data-act="export-json">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
@@ -6191,6 +6428,245 @@ function buildPdfBlob() {
   return doc.output('blob');
 }
 
+/* ---------- CAPF 104 ----------
+   The sortie on the CAP's own fillable CAPF 104 (Dec 21), shipped with the
+   app as vendor/capf104.pdf: pdf-lib fills its form fields and the layout is
+   the original's. The fields stay editable, so a debriefer can add to it.
+   Field names are the form's own; its unnamed checkboxes ("undefined_N") are
+   mapped here by where they sit on the page. */
+const CAPF104_PIC_QUALS = { MP: 'MP', COM: 'COM', Trainee: 'Trainee', TMP: 'undefined_5', IFR: 'undefined_6',
+  MFC: 'MFC', Night: 'Night', WS: 'undefined_7', LES: 'undefined_8' };
+const CAPF104_CREW1_QUALS = { MCP: 'MCP', COM: 'COM_2', MO: 'MO', HRO: 'HRO', MP: 'MP_2', IFR: 'IFR', MS: 'MS',
+  LES: 'LES', TMP: 'TMP', Night: 'Night_2', ADIS: 'ADIS', Trainee: 'Trainee_2', MFC: 'MFC_2', WS: 'WS', AP: 'AP', Other: 'Other_3' };
+// crew members 2–7: nine boxes each, down the columns MS MO HRO · WS ADIS LES · AP Trainee Other
+const CAPF104_CREW_ORDER = ['MS', 'MO', 'HRO', 'WS', 'ADIS', 'LES', 'AP', 'Trainee', 'Other'];
+const CAPF104_EQUIPMENT = { aeronet: 'AERONet', capFm: 'CAP FM Radio', camera: 'Digital Camera', survivalKit: 'Survival Kit',
+  satPhone: 'Sat Phone', vor: 'VOR', dme: 'DME', autopilot: 'Autopilot', gps: 'GPS', flir: 'FLIR',
+  becker: 'Becker  Rho Theta DF', ltronics: 'LTronics DF', repeater: 'Tactical Repeater', lifeRaft: 'Life Raft  Vests', other: 'undefined_63' };
+const CAPF104_ATTACHMENTS = { orm: 'AIF ORM Matrix', recon104b: 'CAPF 104b Recon Summary', ics214: 'ICSF 214 Unit Log',
+  receipts: 'Receipts', sar104a: 'CAPF 104a SAR', other: 'Results Worksheet' };
+const CAPF104_REASONS = { Weather: 'Weather', 'Aircraft Maintenance': 'Aircraft Maintenance', 'Equipment Failure': 'Equipment Failure',
+  'Crew Unavailable': 'Crew Unavailable', 'Customer Cancellation': 'Customer Cancellation', Other: 'undefined_4' };
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error('could not load ' + src));
+    document.head.appendChild(el);
+  });
+}
+
+// Every value the form takes, by its field name: text as strings, boxes as true.
+function capf104Values(log) {
+  const mission = missionOf(log);
+  const b = log.brief;
+  const a = log.aircraftInfo;
+  const d = log.debrief;
+  const totals = timeTotals(log);
+  const tach = tachValues(log);
+  const one = value => value == null ? '' : fmtDecimal(value, 1);
+  const zulu = value => isValidTime(value) ? value + 'Z' : '';
+  const who = (name, capid) => [String(name || '').trim(), String(capid || '').trim()].filter(Boolean).join(' · CAPID ');
+  const lines = (...parts) => parts.map(p => String(p || '').trim()).filter(Boolean).join('\n');
+  const text = {
+    // page 1: mission data, manifest, aircraft, releasing officers
+    'TRACKING NUMBER': log.sar.tracking || log.sortie,
+    'Mission Number': mission.number,
+    'Mission Name': mission.name,
+    'Mission Symbol': mission.symbol,
+    'Mission Date': mission.date,
+    'Crew Contact Phone Email etc': log.crewContact,
+    'Tail Number': log.aircraft,
+    'Callsign': log.callsign,
+    'Type': a.type,
+    'TAS Knots': a.tas,
+    'ColorDescription': a.color,
+    'Fuel In Hours': a.fuelHours,
+    'Home Base': a.homeBase,
+    'Other_4': a.equipmentOther,
+    'Briefer Name  CAPID': who(b.briefer, b.brieferCapid),
+    'Flight Release Officer Name  CAPID': who(b.fro, b.froCapid),
+    // page 2: briefing
+    'WMIRS Sortie': log.sortie,
+    'WMIRS Sortie Type': log.sortieType,
+    'WMIRS Sortie Objective': b.objective,
+    'WMIRS Area of Operations': b.areaOfOps,
+    'Dep Airport': log.depAirport,
+    'Dest Airport': log.destAirport,
+    'ETDz': zulu(b.etd),
+    'ETE': b.ete,
+    'Base Telephone': b.basePhone,
+    'Base Callsign': log.radio.baseCallsign,
+    'Base': log.radio.baseFreq,
+    'AirGround': log.radio.airGround,
+    'AirAir': log.radio.airAir,
+    'Required Radio Checks  Contacts': b.radioChecks,
+    'Other Aircraft in Area Location  Callsign': b.otherAircraft,
+    'Ground Teams in Area Location  Callsign': b.groundTeams,
+    'Sortie Objectives': log.objectives,
+    'Sortie Deliverables': log.deliverables,
+    'Actions To Be Taken on Objectives  Deliverables': b.actions,
+    'Route Of Flight': log.route,
+    'Altitude Assignment  Restrictions': lines(log.altitude, b.altitudeRestrictions),
+    'Airspeed Expected  Restrictions': lines(log.airspeed, b.airspeedRestrictions),
+    'Aircraft Separation Adjoining Areas': b.separation,
+    'Emergency  Alternate Fields': b.alternates,
+    'Military Low Altitude Training Routes': b.mtrs,
+    'Hazards To Flight': b.hazards,
+    'Current Local': b.weather.currentLocal,
+    'Current Enroute': b.weather.currentEnroute,
+    'Current Area of Operations': b.weather.currentArea,
+    'Forecast Local': b.weather.forecastLocal,
+    'Forecast Enroute': b.weather.forecastEnroute,
+    'Forecast Area of Operations': b.weather.forecastArea,
+    // page 3: risk and crew notes
+    'Special Instructions Including Risk Mitigation Procedures': b.specialInstructions,
+    'CREW NOTESRow1': log.notes,
+    // page 4: debrief
+    'ATD Z': zulu(log.times.engineStart.time),
+    'ATA Z': zulu(log.times.shutDown.time),
+    'Hobbs End': log.times.shutDown.hobbs,
+    'Hobbs Start': log.times.engineStart.hobbs,
+    'Tach End': tach.end,
+    'Tach Start': tach.start,
+    'Hobbs ToFrom': one(totals.hobbsToFrom),
+    'Hobbs in Area': one(totals.hobbsArea),
+    'Hobbs Total': one(totals.hobbs),
+    'Fuel Used Gal': d.fuelGal,
+    'Oil Used Qt': d.oilQt,
+    'Fuel  Oil Cost': String(d.fuelCost || '').trim() ? '$' + String(d.fuelCost).trim().replace(/^\$/, '') : '',
+    'Receipt': d.receipt,
+    'Summary': d.summary,
+    'ResultsDeliverables': d.results,
+    'Weather Conditions': d.weather,
+    'Remarks CAPF 104b Reconnaissance Summary ICSF 214 Unit Log Receipts': d.remarks,
+    'Other': d.reason === 'Other' ? d.reasonOther : '',
+    'Other_2': d.attachmentsOther,
+    'Debriefer Name  CAPID': who(d.debriefer, d.debrieferCapid),
+    'Time  Date Debriefed': d.debriefedAt
+  };
+  const boxes = {
+    'Flight Plan Required': b.fpRequired,
+    'Flight Plan Filed': b.fpFiled,
+    'Flight Plan Opened': b.fpOpened,
+    'Flight Plan Closed': d.flightPlanClosed,
+    'ORM Matrix Complete': b.ormComplete,
+    'Risk Assessment Approval': b.riskApproval,
+    'Low': b.riskLevel === 'Low',
+    'Moderate': b.riskLevel === 'Moderate',
+    'High': b.riskLevel === 'High',
+    'Phone_2': b.phoneBriefing,
+    'Phone': d.phoneDebrief,
+    'CAP': a.owner === 'CAP',
+    'Member': a.owner === 'Member Owned',
+    'Wing Paid': d.wingPaid,
+    // the attachment boxes beside Remarks repeat three of the attachments
+    'undefined': d.attachments.recon104b,
+    'undefined_2': d.attachments.ics214,
+    'undefined_3': d.attachments.receipts
+  };
+  SORTIE_EFFECTIVENESS.forEach(option => { boxes[option] = d.effectiveness === option; });
+  if (d.effectiveness && d.effectiveness !== 'Successful' && CAPF104_REASONS[d.reason]) boxes[CAPF104_REASONS[d.reason]] = true;
+  Object.entries(CAPF104_EQUIPMENT).forEach(([key, name]) => { boxes[name] = !!a.equipment[key]; });
+  Object.entries(CAPF104_ATTACHMENTS).forEach(([key, name]) => { boxes[name] = !!d.attachments[key]; });
+
+  // the manifest: the first mission pilot in command, then everyone else in crew order
+  const people = crewInOrder(log).filter(m => String(m.name || '').trim() || String(m.capid || '').trim());
+  const picIndex = people.findIndex(m => m.role === 'MP');
+  const pic = picIndex >= 0 ? people.splice(picIndex, 1)[0] : null;
+  if (pic) {
+    text['Pilot In Command Name  CAPID'] = who(pic.name, pic.capid);
+    Object.entries(CAPF104_PIC_QUALS).forEach(([q, name]) => { if (pic.quals[q]) boxes[name] = true; });
+  }
+  people.slice(0, 7).forEach((m, i) => {
+    text['Crew Member  Passenger ' + (i + 1) + ' Name  CAPID'] = who(m.name, m.capid) + (m.role === 'PAX' ? ' (passenger)' : '');
+    // the form's boxes are the seat's qualifications; the role ticks its own box
+    const quals = Object.assign({}, m.quals, { [m.role]: true });
+    if (i === 0) {
+      Object.entries(CAPF104_CREW1_QUALS).forEach(([q, name]) => { if (quals[q]) boxes[name] = true; });
+    } else {
+      const base = 9 + 9 * (i - 1);
+      CAPF104_CREW_ORDER.forEach((q, k) => { if (quals[q]) boxes['undefined_' + (base + k)] = true; });
+    }
+  });
+  if (pic && !pic.quals.MP) boxes.MP = true;   // the PIC's seat is the mission pilot's
+  return { text, boxes, extraCrew: people.length > 7 ? people.slice(7) : [] };
+}
+
+// The largest size, 9 pt down to 5, at which text fits a box: on one line,
+// or wrapped at words when the box is tall.
+function fitFontSize(font, text, width, height, multi) {
+  for (let size = 9; size > 5; size -= 0.5) {
+    if (!multi) {
+      if (font.widthOfTextAtSize(text, size) <= width && size * 1.15 <= height) return size;
+      continue;
+    }
+    let lines = 0;
+    text.split('\n').forEach(para => {
+      let line = '';
+      lines++;
+      para.split(/\s+/).forEach(word => {
+        const next = line ? line + ' ' + word : word;
+        if (line && font.widthOfTextAtSize(next, size) > width) { lines++; line = word; } else line = next;
+      });
+    });
+    if (lines * size * 1.18 <= height) return size;
+  }
+  return 5;
+}
+
+async function buildCapf104Blob(log) {
+  if (!window.PDFLib) await loadScript('vendor/pdf-lib.min.js');
+  const { PDFDocument, StandardFonts } = window.PDFLib;
+  const res = await fetch('vendor/capf104.pdf');
+  if (!res.ok) throw new Error('blank CAPF 104 missing');
+  const doc = await PDFDocument.load(await res.arrayBuffer());
+  const form = doc.getForm();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const { text, boxes, extraCrew } = capf104Values(log);
+  if (extraCrew.length) {
+    text['CREW NOTESRow1'] = ['More crew: ' + extraCrew.map(m => [m.role, m.name, m.capid && 'CAPID ' + m.capid].filter(Boolean).join(' ')).join('; '),
+      text['CREW NOTESRow1']].filter(Boolean).join('\n\n');
+  }
+  Object.entries(text).forEach(([name, value]) => {
+    const clean = pdfSafe(value).trim();
+    if (!clean) return;
+    let field;
+    try { field = form.getTextField(name); } catch (_) { console.warn('CAPF 104 has no text field', name); return; }
+    // 9 pt where it fits; smaller (down to 5) where it does not. A box taller
+    // than a line wraps.
+    const widget = field.acroField.getWidgets()[0];
+    const rect = widget ? widget.getRectangle() : { width: 200, height: 12 };
+    const multi = rect.height > 22 || /\n/.test(clean);
+    if (multi) field.enableMultiline();
+    const size = fitFontSize(font, clean, rect.width - 4, rect.height - 3, multi);
+    field.acroField.setDefaultAppearance('/Helv ' + size + ' Tf 0 g');
+    field.setText(clean);
+  });
+  Object.entries(boxes).forEach(([name, on]) => {
+    if (!on) return;
+    try { form.getCheckBox(name).check(); } catch (_) { console.warn('CAPF 104 has no checkbox', name); }
+  });
+  form.updateFieldAppearances(font);
+  const bytes = await doc.save();
+  return new Blob([bytes], { type: 'application/pdf' });
+}
+
+async function exportCapf104() {
+  if (!needSortie()) return;
+  const log = activeSortie();
+  toast('Filling in the CAPF 104…');
+  try {
+    const blob = await buildCapf104Blob(log);
+    await shareFile(exportName('pdf').replace(/^mission-log_/, 'CAPF104_'), blob);
+  } catch (err) {
+    console.warn('CAPF 104 failed', err);
+    toast('Could not fill in the CAPF 104');
+  }
+}
+
 function exportPdf() {
   try {
     const blob = buildPdfBlob();
@@ -6771,6 +7247,7 @@ const actions = {
   'terms': () => termsSheet(false),
   'accept-terms': () => acceptTerms(),
   'print': () => printLog(),
+  'export-capf104': () => { closeSheet(); exportCapf104(); },
   'share-log': () => {
     // Pick up a signature stroke that has not been saved yet.
     if (sigCtl) sigCtl.flush();
@@ -6852,6 +7329,13 @@ const actions = {
     save();
   },
   'reset-all': () => resetAll(),
+  'debriefed-now': () => {
+    const log = activeLog();
+    log.debrief.debriefedAt = fmtDateZ(new Date());
+    save();
+    const input = $('[data-bind="debrief.debriefedAt"]');
+    if (input) input.value = log.debrief.debriefedAt;
+  },
   'sign-now': () => {
     const log = activeLog();
     log.signoff.dateTime = fmtDateZ(new Date());
@@ -7012,6 +7496,8 @@ document.addEventListener('input', event => {
 document.addEventListener('change', event => {
   const el = event.target.closest('[data-bind]');
   if (!el) return;
+  // a crew member's role decides which qualification boxes they get
+  if (el.matches('[data-rerender]')) { setPath(activeLog(), el.dataset.bind, el.value); save(); render(); return; }
   const path = el.dataset.bind;
   const kind = el.dataset.norm;
 
