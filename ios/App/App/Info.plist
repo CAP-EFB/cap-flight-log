@@ -47,6 +47,8 @@
 	<string>Mission Log shows your position, accuracy and CAP grid, and stamps it on checkpoints and observations.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Mission Log takes photos for observations and scans printed briefings into your notes.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Mission Log listens while you dictate a note.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
