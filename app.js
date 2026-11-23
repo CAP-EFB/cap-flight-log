@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.32.0';
+const APP_VERSION = '1.32.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2983,11 +2983,6 @@ function renderWhenIdle() {
 function render() {
   if (!state) return;
   renderPending = false;
-  // the full-screen sketch pad belongs to Notes
-  if (sketchFullscreen && activeTab !== 'sketch') {
-    sketchFullscreen = false;
-    document.documentElement.classList.remove('sketch-full');
-  }
   renderStrip();
   renderGpsChip();
   renderTabbar();
@@ -4195,7 +4190,6 @@ function closeSortie() {
 
 // The page of the sketch pad on screen, per sortie (not saved).
 const sketchPageIndex = {};
-let sketchFullscreen = false;
 
 function currentSketchPage(log) {
   const pages = log.sketches;
@@ -4203,11 +4197,6 @@ function currentSketchPage(log) {
   sketchPageIndex[log.id] = index;
   return { page: pages[index], index, count: pages.length };
 }
-
-const SKETCH_ICONS = {
-  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'
-};
 
 // Notes: one text box filling the page. It shrinks above the keyboard.
 function notesView(log) {
@@ -4228,17 +4217,15 @@ const SKETCH_TOOL_ICONS = {
   prev: '<path d="m15 6-6 6 6 6"/>',
   next: '<path d="m9 6 6 6-6 6"/>'
 };
-const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_TOOL_ICONS[name] || SKETCH_ICONS[name]}</svg>`;
+const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_TOOL_ICONS[name]}</svg>`;
 
 /* The sketch pad fills everything between the header and the tab bar: the
    page takes the shape of the screen, and its tools sit in a row of the
    header, because in the app the PencilKit canvas lies over the page and
-   would hide anything placed on it. Full screen hides the rest of the
-   header and the tab bar; the tools stay. */
+   would hide anything placed on it. */
 function sketchToolsHTML(log) {
   const { page, index, count } = currentSketchPage(log);
   const bg = page.bg === 'image' ? '' : page.bg;
-  const full = sketchFullscreen;
   return `<div class="sk-row">
       <div class="seg sk-glass sk-bgs" role="group" aria-label="Background">
         ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
@@ -4261,9 +4248,6 @@ function sketchToolsHTML(log) {
         <button type="button" class="sk-btn" data-act="sketch-add-page" aria-label="Add a page" title="Add a page">${sketchIcon('add')}</button>
         <button type="button" class="sk-btn" data-act="sketch-del-page" aria-label="Delete this page" title="Delete this page">${sketchIcon('clear')}</button>
       </div>
-      <div class="sk-glass">
-        <button type="button" class="sk-btn" data-act="sketch-fullscreen" aria-label="${full ? 'Exit full screen' : 'Full screen'}" title="${full ? 'Exit full screen' : 'Full screen'}">${sketchIcon(full ? 'shrink' : 'expand')}</button>
-      </div>
     </div>`;
 }
 
@@ -4283,7 +4267,7 @@ function renderTopbarTools() {
 function sketchView(log) {
   const { page, index } = currentSketchPage(log);
   const { w, h } = sketchSize(page);
-  return `<div class="sketch-shell${sketchFullscreen ? ' fullscreen' : ''}" id="sketch-card">
+  return `<div class="sketch-shell" id="sketch-card">
       <div class="sketch-stage">
         <div class="canvas-wrap" style="--ar:${w / h}">
           <canvas id="sketch-bg" width="${w}" height="${h}" aria-hidden="true"></canvas>
@@ -4575,7 +4559,7 @@ function setupNativeSketch(page, W, H) {
     if ($('#overlay').classList.contains('show')) nativeSketchVisible(false);
   };
   show().catch(err => console.warn('sketch', err));
-  // follow the page on screen: rotation, full screen, the header changing height
+  // follow the page on screen: rotation, the header changing height
   const wrap = $('.sketch-stage .canvas-wrap');
   if (wrap && window.ResizeObserver) {
     new ResizeObserver(() => {
@@ -4837,13 +4821,6 @@ async function setSketchBackground(bg) {
   page.bg = bg;
   page.reflatten = true;
   save();
-  if (activeTab === 'sketch') render();
-}
-
-function setSketchFullscreen(on) {
-  if (sketchCtl) sketchCtl.flush();
-  sketchFullscreen = on;
-  document.documentElement.classList.toggle('sketch-full', on);
   if (activeTab === 'sketch') render();
 }
 
@@ -5846,7 +5823,7 @@ function helpSheet() {
             <span><strong>Observation photos</strong><span class="mi-sub">Tap Photo on an observation to use the camera or photo library. Up to six per observation; photos appear in the PDF.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>Sketch pad</strong><span class="mi-sub">Draw with a finger or Apple Pencil. Pick a background (grid, plain, or the sectional, topographic or terrain map around the search area), add pages, and tap the expand button for a full-screen pad.</span></span>
+            <span><strong>Sketch pad</strong><span class="mi-sub">Draw with a finger or Apple Pencil. Pick a background (grid, plain, or the sectional, topographic or terrain map around the search area), and add pages, all from the tools in the header. In the iPad app, Apple's palette has the pens, eraser, lasso and ruler; pinch to zoom.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
             <span><strong>Offline maps</strong><span class="mi-sub">Before you leave, open Brief › Offline maps and tap Save. The sectional (and Topo or Terrain if you want them) around the search area, entry and exit points and ForeFlight route is kept on the iPad, so the chart and the sketch pad show it with no signal. Save the sectional again when it is more than 56 days old.</span></span>
@@ -7992,7 +7969,6 @@ const actions = {
     toast('Signature cleared');
   },
   'sketch-bg': el => setSketchBackground(el.dataset.value),
-  'sketch-fullscreen': () => setSketchFullscreen(!sketchFullscreen),
   'sketch-page': el => {
     const log = activeSortie();
     if (!log) return;
@@ -8100,10 +8076,6 @@ document.addEventListener('click', event => {
   if (!actions[name]) return;
   event.preventDefault();
   actions[name](el, event);
-});
-
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && sketchFullscreen) setSketchFullscreen(false);
 });
 
 document.addEventListener('input', event => {

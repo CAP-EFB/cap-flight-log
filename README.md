@@ -39,8 +39,8 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
 - **Notes** — free text, the whole page, shrinking above the keyboard.
 - **Sketch** — a sketch pad filling everything between the header and the tab bar: each page takes the
-  shape of the screen it was started on, and the tools (backgrounds, Undo/Redo, Clear, pages, full screen)
-  sit in a row of the header. Full screen hides the rest of the header and the tab bar. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
+  shape of the screen it was started on, and the tools (backgrounds, Undo/Redo, Clear, pages) sit in a
+  row of the header. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
   lasso, ruler, colours), pressure and tilt, palm rejection (a finger draws unless Only Draw with Apple
   Pencil is on in iPad Settings), pinch to zoom up to 5×, and Undo/Redo. The page's background zooms under
   the strokes; each page keeps its PencilKit drawing (to edit again) and a PNG of its ink. Ink from before
