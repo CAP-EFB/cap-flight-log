@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.37.1';
+const APP_VERSION = '1.37.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -4503,8 +4503,14 @@ async function startNoteDictation() {
   noteDictation = { start: spot.end, text: '', web: null };
   renderDictateButton();
   if (NATIVE) {
-    try { await Native.MissionLog.dictateStart(); }
-    catch (err) { toast(String(err && err.message || err)); stopNoteDictation(); }
+    try {
+      await Native.MissionLog.dictateStart();
+      toast('Listening · speak, then tap Stop');
+    } catch (err) {
+      console.warn('[dictation]', err);
+      toast('Dictation · ' + String(err && err.message || err));
+      stopNoteDictation();
+    }
     return;
   }
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -4541,7 +4547,19 @@ function renderDictateButton() {
 }
 
 if (NATIVE) {
-  Native.MissionLog.addListener('dictation', data => dictationText(data.text || '', !!data.final));
+  Native.MissionLog.addListener('dictation', data => {
+    if (data.error) {
+      console.warn('[dictation]', data.error);
+      // kLSRErrorDomain 201: the iPad's own Dictation is switched off
+      toast(/kLSRErrorDomain 201|Siri and Dictation are disabled/.test(data.error)
+        ? 'Dictation is off on this iPad · turn it on in Settings › General › Keyboard › Enable Dictation'
+        : 'Dictation stopped · ' + data.error);
+      stopNoteDictation();
+      return;
+    }
+    if (data.text) dictationText(data.text, !!data.final);
+    else if (data.final) stopNoteDictation();
+  });
 }
 
 async function scanIntoNotes() {

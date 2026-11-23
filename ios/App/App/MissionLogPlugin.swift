@@ -58,6 +58,11 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         notifyListeners("dictation", data: ["text": text, "final": final])
     }
 
+    func dictationError(_ message: String) {
+        NSLog("[dictation] %@", message)
+        notifyListeners("dictation", data: ["error": message, "final": true])
+    }
+
     /// Opens the iPad's document camera (auto-crop, several pages), reads the
     /// text off the pages and returns it.
     @objc func scanText(_ call: CAPPluginCall) {
@@ -592,21 +597,29 @@ final class Dictation {
             AVAudioSession.sharedInstance().requestRecordPermission { granted in
                 DispatchQueue.main.async {
                     guard granted else { done("The microphone is off for Mission Log in Settings"); return }
-                    do { try self.begin(); done(nil) } catch { done(error.localizedDescription) }
+                    do { try self.begin(); done(nil) } catch {
+                        NSLog("[dictation] could not start: %@", error.localizedDescription)
+                        done(error.localizedDescription)
+                    }
                 }
             }
         }
     }
 
+    /// Whether the words are worked out on the iPad (works with no signal).
+    private(set) var onDevice = false
+
     private func begin() throws {
         stop()
         guard let recognizer = recognizer, recognizer.isAvailable else { throw NSError(domain: "Dictation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Dictation is not available right now"]) }
+        NSLog("[dictation] start, on-device supported: %@", recognizer.supportsOnDeviceRecognition ? "yes" : "no")
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        onDevice = recognizer.supportsOnDeviceRecognition
+        if onDevice { request.requiresOnDeviceRecognition = true }
         if #available(iOS 16.0, *) { request.addsPunctuation = true }
         self.request = request
         let input = engine.inputNode
@@ -619,6 +632,12 @@ final class Dictation {
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             if let result = result {
                 self?.plugin?.dictation(text: result.bestTranscription.formattedString, final: result.isFinal)
+            }
+            if let error = error as NSError? {
+                // 1110: no speech heard; 203/301: cancelled by Stop. Anything else is worth saying.
+                let quiet = [1110, 203, 301, 216].contains(error.code)
+                if !quiet { self?.plugin?.dictationError(error.localizedDescription + " (" + error.domain + " " + String(error.code) + ")") }
+                else { self?.plugin?.dictation(text: result?.bestTranscription.formattedString ?? "", final: true) }
             }
             if error != nil || (result?.isFinal ?? false) {
                 DispatchQueue.main.async { self?.stop() }
