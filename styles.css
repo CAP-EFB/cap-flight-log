@@ -308,6 +308,10 @@ h1, h2, h3, p { margin: 0; }
 }
 .sortie-name {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 2px;
   color: var(--chrome-text);
   font-size: 13px;
   font-weight: 650;
@@ -1219,6 +1223,8 @@ a.menu-item { text-decoration: none; }
 .step.now { color: var(--text); border-color: var(--blue); }
 .step.now .step-num { background: var(--blue-btn); color: #fff; }
 .sortie-name[hidden] { display: none; }
+/* a pipe between the mission number and the sortie */
+.sortie-name::before { content: ''; width: 1px; height: 16px; background: rgba(255, 255, 255, .28); }
 .card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
 /* sortie tabs stay shut until the mission has a sortie */
 .tabbar.locked .tab:not([data-tab="logbook"]) { opacity: .38; }
