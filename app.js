@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.22.4';
+const APP_VERSION = '1.22.6';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -422,6 +422,7 @@ async function syncTrackRecorder() {
     trackSortieId = log.id;
     if (NATIVE) await Native.MissionLog.startTrack({ sortieId: log.id }).catch(err => console.warn('recorder', err));
   }
+  renderGpsChip();
   clearInterval(trackPullTimer);
   trackPullTimer = trackSortieId && NATIVE
     ? setInterval(() => pullTrack(state.logs.find(l => l.id === trackSortieId)), 60000)
@@ -971,7 +972,7 @@ function positionSheet() {
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, dot, accuracy, follow: true, trackLine: null, remove: () => map.remove() };
+  positionMap = { map, dot, accuracy, follow: true, trackLine: null, checkpoints: null, remove: () => map.remove() };
   drawTrackOnMap();
   pullTrack(activeLog());
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
@@ -979,17 +980,54 @@ function positionSheet() {
   setTimeout(() => map.invalidateSize(), 60);
 }
 
+// A checkpoint you add yourself (+ Checkpoint): a flag.
+const CUSTOM_CHECKPOINT_ICON = '<path d="M6 21V4"/><path d="M6 4h11l-2.5 4L17 12H6"/>';
+
+// Where a checkpoint was stamped: its own position, or else the track point
+// nearest in time (within two minutes).
+function checkpointPosition(log, entry) {
+  const lat = parseLat(entry.lat);
+  const lon = parseLon(entry.lon);
+  if (lat != null && lon != null) return [lat, lon];
+  if (!entry.createdAt || !log.track.length) return null;
+  let best = null;
+  log.track.forEach(p => {
+    const gap = Math.abs(p[0] - entry.createdAt);
+    if (!best || gap < best.gap) best = { gap, p };
+  });
+  return best && best.gap <= 120000 ? [best.p[1], best.p[2]] : null;
+}
+
+// The track, with each checkpoint marked by its Fly button's icon.
 function drawTrackOnMap(fit) {
   if (!positionMap || !window.L) return;
   const log = activeLog();
   const pts = log.track.map(p => [p[1], p[2]]);
   if (positionMap.trackLine) positionMap.trackLine.remove();
+  if (positionMap.checkpoints) positionMap.checkpoints.remove();
   positionMap.trackLine = pts.length > 1
     ? L.polyline(pts, { color: '#d81b60', weight: 3, opacity: 0.9 }).addTo(positionMap.map)
     : null;
-  if (fit && positionMap.trackLine) {
+  const markers = log.entries.map(entry => {
+    const at = checkpointPosition(log, entry);
+    if (!at) return null;
+    const quick = QUICK.find(q => q.kind === entry.kind);
+    const label = entry.event || (quick && quick.label) || 'Checkpoint';
+    const icon = L.divIcon({
+      className: 'cp-marker',
+      html: `<span class="cp-pin${quick ? '' : ' custom'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${quick ? quick.icon : CUSTOM_CHECKPOINT_ICON}</svg></span>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+    return L.marker(at, { icon, title: label, keyboard: false })
+      .bindTooltip(label + (entry.time ? ' · ' + fmtZ(entry.time) : ''), { direction: 'top', offset: [0, -14] });
+  }).filter(Boolean);
+  positionMap.checkpoints = markers.length ? L.featureGroup(markers).addTo(positionMap.map) : null;
+  if (fit && (positionMap.trackLine || positionMap.checkpoints)) {
+    const bounds = positionMap.trackLine ? positionMap.trackLine.getBounds() : positionMap.checkpoints.getBounds();
+    if (positionMap.checkpoints) bounds.extend(positionMap.checkpoints.getBounds());
     positionMap.follow = false;
-    positionMap.map.fitBounds(positionMap.trackLine.getBounds(), { padding: [24, 24], maxZoom: chartFullZoom() });
+    positionMap.map.fitBounds(bounds, { padding: [32, 32], maxZoom: chartFullZoom() });
   }
 }
 
@@ -1018,6 +1056,14 @@ function renderGpsChip() {
   const chip = $('#gpsChip');
   const label = $('#gpsLabel');
   if (!chip || !label) return;
+  // Position and accuracy show once the open sortie has its first checkpoint;
+  // REC while its flight track is being recorded.
+  const sortie = activeSortie();
+  const shown = !!(sortie && sortie.entries.length);
+  chip.hidden = !shown;
+  $$('.gps-pipe, #gpsPipeAfter').forEach(pipe => { pipe.hidden = !shown; });
+  const rec = $('#recIcon');
+  if (rec) rec.hidden = !(sortie && trackSortieId === sortie.id);
   const fix = freshFix();
   let level = 'off';
   let text = 'GPS off';
@@ -1981,6 +2027,7 @@ function render() {
   if (!state) return;
   renderPending = false;
   renderStrip();
+  renderGpsChip();
   renderTabbar();
   const view = $('#view');
   if (!view) return;
@@ -4318,13 +4365,14 @@ function addOpsCheck() {
   });
 }
 
-function switchLog(id) {
+// Open a sortie: on its Brief from Missions, on the same tab from the header.
+function switchLog(id, keepTab) {
   const log = state.logs.find(l => l.id === id);
   if (!log) return;
   state.activeMissionId = log.missionId;
   state.activeId = id;
   closeSheet();
-  activeTab = defaultTab();
+  if (!keepTab || activeTab === 'logbook') activeTab = defaultTab();
   save();
   render();
   window.scrollTo(0, 0);
@@ -4423,6 +4471,20 @@ function deleteLog() {
   save();
   render();
   toast('Sortie deleted');
+}
+
+// Header: switch to another sortie of this mission, or add one.
+function sortieSheet() {
+  const log = activeSortie();
+  if (!log) return;
+  const sorties = missionSorties(log);
+  openSheet({
+    title: 'Sorties',
+    sub: missionTitle(missionOf(log)) + ' · ' + sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
+    body: `<div class="log-list" data-keep-tab>${sorties.map(sortieCardRowHTML).join('')}</div>`,
+    footer: `<button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" data-act="add-sortie">+ Add sortie</button>`
+  });
 }
 
 function slug(value) {
@@ -5850,7 +5912,7 @@ const actions = {
     save();
     render();
   },
-  'switch-log': el => switchLog(el.dataset.id),
+  'switch-log': el => switchLog(el.dataset.id, !!el.closest('[data-keep-tab]')),
   'new-log': () => createLog(),
   'add-sortie': () => addSortie(),
   'add-crew': el => {
@@ -5876,6 +5938,7 @@ const actions = {
     });
   },
   'send-sortie': () => exportSortie(),
+  'sortie-menu': () => sortieSheet(),
   'del-log': () => deleteLog(),
   'menu': () => menuSheet(),
   'settings': () => settingsSheet(),

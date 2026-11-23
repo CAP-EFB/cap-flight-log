@@ -13,7 +13,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 **Brief → Fly → Notes → Debrief → Sign**.
 
 - **Missions** — the first tab: the picked mission at the top with its sorties and + Add sortie, then the
-  previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it; tapping a sortie opens its Brief. The +
+  previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it; tapping a sortie opens its Brief. The sortie name in the header switches between the mission's sorties and stays on the same tab. The +
   button adds a mission from WMIRS (number required; symbol, name, date and base optional). Mission
   details can close a mission once it is closed in WMIRS.
 - **Adding a sortie** — the WMIRS Air Sortie Add/Edit fields: Sortie No. (the next one is suggested),
@@ -28,15 +28,17 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
 - **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
-- **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), shown
-  on the chart and on Debrief, and exportable as GPX.
+- **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with
+  REC in the header while it records. Shown on the chart with each checkpoint marked by its Fly button
+  icon, summed up on Debrief, and exportable as GPX.
 - **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start
   and Shut Down) and the checkpoint times, Hobbs and tach end/start/total with Hobbs In Area and To/From,
   fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
   (with WMIRS's character limits), Sortie Effectiveness and the reason if not successful. The CAPF 104a
   actual column and search effectiveness follow.
 - **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
-- **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header. Switch Live GPS
+- **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header, once the open
+  sortie has its first checkpoint. Switch Live GPS
   off in Settings to save battery.
 - **Send sortie to crew** — Menu → Send sortie to crew shares only the
   current sortie by AirDrop, Messages or Mail. The crew member saves it to Files and uses Menu → Import
