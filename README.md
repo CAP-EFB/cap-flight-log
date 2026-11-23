@@ -29,7 +29,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   weather, flight plan and risk assessment with special instructions, the briefer and FRO, the search
   area (corners, entry and exit points, ForeFlight FPL import), offline maps, the planned column of the
   SAR worksheet (CAPF 104a), frequencies (including Air/Ground, Air/Air, base, base telephone and required
-  radio checks) and nav aids. The aeroplane button goes on to Fly.
+  radio checks) and nav aids.
 - **Fly** — a moving map (Sectional, Topo or Terrain) between the header and the tab bar, following the
   aircraft, with the track, checkpoints, ForeFlight plan and search area on it. Over the map on dark glass:
   the position (grid, cell, accuracy) and OPS status top left; the checkpoint buttons and + Observation down the right (stamped

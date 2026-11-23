@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.35.0';
+const APP_VERSION = '1.35.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -3301,13 +3301,14 @@ function logbookView() {
   const nm = state.logs.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
   return `<div class="stack">
     ${active ? activeMissionHTML(active) : ''}
-    ${open.length || !active ? `<section class="card">
+    <section class="card">
       <div class="card-head">
         <div class="head-left"><h2>${active ? 'Other open missions' : 'Open missions'}</h2><span class="count-badge">${open.length}</span></div>
+        <button type="button" class="btn small primary" data-act="new-mission">+ Add mission</button>
       </div>
       ${open.length ? `<div class="log-list">${open.map(missionRowHTML).join('')}</div>`
-        : `<div class="empty"><strong>No open missions</strong>Tap + to add a mission from WMIRS.</div>`}
-    </section>` : ''}
+        : `<div class="empty"><strong>${active ? 'No other open missions' : 'No open missions'}</strong>Add a mission from WMIRS with + Add mission.</div>`}
+    </section>
     <section class="card">
       <div class="card-head">
         <div class="head-left"><h2>Closed missions</h2><span class="count-badge">${closed.length}</span></div>
@@ -3321,8 +3322,7 @@ function logbookView() {
       </div>
       <div class="sheet-note">Missions and their sorties are created in WMIRS. Add each here with the numbers WMIRS gave it. Everything stays on this iPad.</div>
     </section>
-  </div>
-  ${fabHTML('new-mission', 'Add a mission')}`;
+  </div>`;
 }
 
 // Close or reopen a mission. Closing puts it away: it leaves the top of
@@ -3362,19 +3362,6 @@ function activeMissionHTML(mission) {
       <button class="btn" data-act="toggle-mission-closed">${mission.closed ? 'Reopen mission' : 'Close mission'}</button>
     </div>
   </section>`;
-}
-
-const FAB_ICONS = {
-  plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
-  // the Fly tab's aeroplane
-  fly: '<path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
-};
-
-// The round button in the bottom corner: add a mission on Missions, go fly on Brief.
-function fabHTML(act, label, icon) {
-  return `<button type="button" class="fab" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">
-    <svg viewBox="0 0 24 24" aria-hidden="true">${FAB_ICONS[icon || 'plus']}</svg>
-  </button>`;
 }
 
 function missionFieldsHTML(values, bind) {
@@ -3783,8 +3770,7 @@ function planView(log) {
       </div>
       <div class="nav-grid">${navRows}</div>
     </section>
-  </div>
-  ${fabHTML('start-flight-log', 'Start the flight log', 'fly')}`;
+  </div>`;
 }
 
 /* Debrief, in the order of the WMIRS Air Sortie Debrief: flight plan closed,
@@ -8113,8 +8099,6 @@ const actions = {
   'nm-save': () => saveNewMission(),
   'nm-today': () => { const d = $('#nm-date'); if (d) d.value = todayMissionDate(); },
   'ns-save': () => saveAddSortie(),
-  // from Brief: on to Fly, where the sortie's flight log is kept
-  'start-flight-log': () => switchTab('fly'),
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
     setFlyLog(true, 'full');
