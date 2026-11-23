@@ -3,3 +3,5 @@ www/
 .DS_Store
 ios/App/build/
 ios/App/build-device/
+build/
+ios/App/build-sim/
