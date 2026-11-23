@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.3';
+const APP_VERSION = '1.23.4';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -4835,7 +4835,6 @@ function printLog() {
 
 /* ---------- PDF export ---------- */
 
-let pdfLogoData = null;
 
 function isStandaloneApp() {
   return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
@@ -4867,53 +4866,29 @@ function pdfCoordPair(latRaw, lonRaw) {
   return pdfSafe(fmtCoord(lat, true) + ' / ' + fmtCoord(lon, false));
 }
 
-function loadImageData(url) {
-  return fetch(url)
-    .then(response => {
-      if (!response.ok) throw new Error('image request failed');
-      return response.blob();
-    })
-    .then(blob => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    }));
-}
-
-function preloadPdfLogo() {
-  loadImageData('icons/emblem.png')
-    .then(data => { pdfLogoData = data; })
-    .catch(() => { /* the PDF still works without the corner mark */ });
-}
-
 function pdfHeader(doc, title, subtitle, rightLines) {
   const W = doc.internal.pageSize.getWidth();
   const M = 36;
-  const navy = [18, 63, 110];
+  const black = [0, 0, 0];
 
-  if (pdfLogoData) {
-    try { doc.addImage(pdfLogoData, 'PNG', M, 28, 40, 40); } catch (_) { /* ignore */ }
-  }
-
-  const textX = pdfLogoData ? M + 50 : M;
+  const textX = M;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(17);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(black[0], black[1], black[2]);
   doc.text(pdfSafe(title), textX, 46);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(92, 106, 118);
+  doc.setTextColor(85, 85, 85);
   doc.text(pdfSafe(subtitle).toUpperCase(), textX, 59);
 
   doc.setFontSize(8);
-  doc.setTextColor(30, 40, 50);
+  doc.setTextColor(0, 0, 0);
   rightLines.forEach((line, index) => {
     doc.text(pdfSafe(line), W - M, 38 + index * 11, { align: 'right' });
   });
 
-  doc.setDrawColor(navy[0], navy[1], navy[2]);
+  doc.setDrawColor(black[0], black[1], black[2]);
   doc.setLineWidth(1.6);
   doc.line(M, 76, W - M, 76);
 }
@@ -4929,9 +4904,9 @@ function buildPdfBlob() {
   const H = doc.internal.pageSize.getHeight();
   const M = 36;
   const CW = W - M * 2;
-  const navy = [18, 63, 110];
-  const grey = [92, 106, 118];
-  const dark = [30, 40, 50];
+  const ink = [0, 0, 0];
+  const grey = [85, 85, 85];
+  const dark = [0, 0, 0];
   const log = activeLog();
   const totals = timeTotals(log);
   const printed = fmtDateZ(new Date());
@@ -4964,7 +4939,7 @@ function buildPdfBlob() {
     const row = Math.floor(index / 4);
     const x = M + col * cellW;
     const top = y + row * cellH;
-    doc.setDrawColor(170, 185, 198);
+    doc.setDrawColor(170, 170, 170);
     doc.setLineWidth(0.5);
     doc.rect(x, top, cellW, cellH);
 
@@ -4991,7 +4966,7 @@ function buildPdfBlob() {
   }
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('CREW', M, y + 7);
   doc.autoTable({
     startY: y + 11,
@@ -5002,9 +4977,9 @@ function buildPdfBlob() {
     theme: 'grid',
     styles: {
       font: 'helvetica', fontSize: 7.6, cellPadding: 2.4, textColor: dark,
-      lineColor: [150, 160, 170], lineWidth: 0.4, overflow: 'linebreak'
+      lineColor: [150, 150, 150], lineWidth: 0.4, overflow: 'linebreak'
     },
-    headStyles: { fillColor: [232, 238, 244], textColor: navy, fontSize: 6.2, fontStyle: 'bold' },
+    headStyles: { fillColor: [235, 235, 235], textColor: ink, fontSize: 6.2, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 34, halign: 'center', fontStyle: 'bold' },
       1: { cellWidth: CW / 2 - 34 - 62 },
@@ -5019,7 +4994,7 @@ function buildPdfBlob() {
   // Flight times and totals
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('TIMES', M, y + 7);
   doc.text('TOTALS', 350, y + 7);
 
@@ -5027,16 +5002,16 @@ function buildPdfBlob() {
   const rowH = 15;
   const tableTop = y + 13;
 
-  doc.setFillColor(232, 238, 244);
+  doc.setFillColor(235, 235, 235);
   doc.rect(M, tableTop, leftW, rowH, 'F');
-  doc.setDrawColor(150, 160, 170);
+  doc.setDrawColor(150, 150, 150);
   doc.setLineWidth(0.5);
   doc.rect(M, tableTop, leftW, rowH);
   doc.line(M + 150, tableTop, M + 150, tableTop + rowH);
   doc.line(M + 215, tableTop, M + 215, tableTop + rowH);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.2);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('EVENT', M + 4, tableTop + 10);
   doc.text('TIME (Z)', M + 156, tableTop + 10);
   doc.text('HOBBS', M + 221, tableTop + 10);
@@ -5044,7 +5019,7 @@ function buildPdfBlob() {
   TIME_DEFS.forEach((def, index) => {
     const value = log.times[def.key] || {};
     const top = tableTop + rowH * (index + 1);
-    doc.setDrawColor(170, 185, 198);
+    doc.setDrawColor(170, 170, 170);
     doc.rect(M, top, leftW, rowH);
     doc.line(M + 150, top, M + 150, top + rowH);
     doc.line(M + 215, top, M + 215, top + rowH);
@@ -5073,7 +5048,7 @@ function buildPdfBlob() {
     const row = Math.floor(index / 2);
     const x = totalsX + col * totalsCell;
     const top = tableTop + row * totalsH;
-    doc.setDrawColor(170, 185, 198);
+    doc.setDrawColor(170, 170, 170);
     doc.rect(x, top, totalsCell, totalsH);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(5.8);
@@ -5095,7 +5070,7 @@ function buildPdfBlob() {
   // Flight log
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('SORTIE LOG', M, y + 7);
 
   const logRows = log.entries.map(entry => [
@@ -5121,13 +5096,13 @@ function buildPdfBlob() {
       fontSize: 7,
       cellPadding: 2.6,
       textColor: dark,
-      lineColor: [150, 160, 170],
+      lineColor: [150, 150, 150],
       lineWidth: 0.4,
       overflow: 'linebreak'
     },
     headStyles: {
-      fillColor: [232, 238, 244],
-      textColor: navy,
+      fillColor: [235, 235, 235],
+      textColor: ink,
       fontSize: 6.2,
       fontStyle: 'bold'
     },
@@ -5146,7 +5121,7 @@ function buildPdfBlob() {
   // OPS checks
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('OPS STATUS CHECKS', M, y + 7);
 
   const opsRows = log.ops.map((op, index) => [
@@ -5172,12 +5147,12 @@ function buildPdfBlob() {
       fontSize: 7,
       cellPadding: 2.6,
       textColor: dark,
-      lineColor: [150, 160, 170],
+      lineColor: [150, 150, 150],
       lineWidth: 0.4
     },
     headStyles: {
-      fillColor: [232, 238, 244],
-      textColor: navy,
+      fillColor: [235, 235, 235],
+      textColor: ink,
       fontSize: 6.2,
       fontStyle: 'bold'
     },
@@ -5209,7 +5184,7 @@ function buildPdfBlob() {
   if (wmirs.length) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7);
-    doc.setTextColor(navy[0], navy[1], navy[2]);
+    doc.setTextColor(ink[0], ink[1], ink[2]);
     doc.text('WMIRS BRIEF & DEBRIEF', M, ny + 6);
     ny += 13;
     const labelW = 112;
@@ -5223,7 +5198,7 @@ function buildPdfBlob() {
         pdfHeader(doc, 'Notes & Observations', mission + ' · Sortie ' + sortie + ' · ' + aircraft, ['Printed ' + printed]);
         ny = 88;
       }
-      doc.setDrawColor(170, 185, 198);
+      doc.setDrawColor(170, 170, 170);
       doc.setLineWidth(0.5);
       doc.rect(M, ny, CW, rowH);
       doc.setFont('helvetica', 'bold');
@@ -5241,14 +5216,14 @@ function buildPdfBlob() {
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('NOTES / SKETCHES', M, ny + 6);
   ny += 13;
 
   const noteText = pdfSafe(log.notes || '');
   const noteLines = noteText ? doc.splitTextToSize(noteText, CW - 10) : [];
   const noteH = Math.max(46, Math.min(160, noteLines.length * 9.6 + 12));
-  doc.setDrawColor(170, 185, 198);
+  doc.setDrawColor(170, 170, 170);
   doc.setLineWidth(0.5);
   doc.rect(M, ny, CW, noteH);
   if (noteLines.length) {
@@ -5272,7 +5247,7 @@ function buildPdfBlob() {
     const sx = (W - sw) / 2;
     try {
       doc.addImage(sketch, 'JPEG', sx, ny, sw, sh);
-      doc.setDrawColor(170, 185, 198);
+      doc.setDrawColor(170, 170, 170);
       doc.rect(sx - 2, ny - 2, sw + 4, sh + 4);
     } catch (_) { /* skip a broken image */ }
     ny += sh + 10;
@@ -5280,7 +5255,7 @@ function buildPdfBlob() {
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('OBSERVATIONS', M, ny + 6);
   ny += 13;
 
@@ -5314,13 +5289,13 @@ function buildPdfBlob() {
       ny = 88;
     }
 
-    doc.setFillColor(238, 243, 248);
+    doc.setFillColor(242, 242, 242);
     doc.rect(M, ny, CW, 15, 'F');
-    doc.setDrawColor(170, 185, 198);
+    doc.setDrawColor(170, 170, 170);
     doc.rect(M, ny, CW, boxH);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
-    doc.setTextColor(navy[0], navy[1], navy[2]);
+    doc.setTextColor(ink[0], ink[1], ink[2]);
     doc.text(pdfSafe(head), M + 4, ny + 10);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.4);
@@ -5340,7 +5315,7 @@ function buildPdfBlob() {
         try {
           const format = photo.src.startsWith('data:image/png') ? 'PNG' : 'JPEG';
           doc.addImage(photo.src, format, px, py, pw, photoH);
-          doc.setDrawColor(170, 185, 198);
+          doc.setDrawColor(170, 170, 170);
           doc.rect(px, py, pw, photoH);
         } catch (_) { /* skip a broken image */ }
         px += pw + photoGap;
@@ -5359,7 +5334,7 @@ function buildPdfBlob() {
   ny += 2;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
-  doc.setTextColor(navy[0], navy[1], navy[2]);
+  doc.setTextColor(ink[0], ink[1], ink[2]);
   doc.text('CERTIFICATION', M, ny + 6);
   ny += 14;
 
@@ -5414,7 +5389,7 @@ function buildPdfBlob() {
     const sarTitle = (text, top) => {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(7);
-      doc.setTextColor(navy[0], navy[1], navy[2]);
+      doc.setTextColor(ink[0], ink[1], ink[2]);
       doc.text(text, M, top + 6);
     };
     const sarTable = (startY, head, body, columnStyles) => {
@@ -5427,9 +5402,9 @@ function buildPdfBlob() {
         theme: 'grid',
         styles: {
           font: 'helvetica', fontSize: 8, cellPadding: 3.2, textColor: dark,
-          lineColor: [150, 160, 170], lineWidth: 0.4, overflow: 'linebreak'
+          lineColor: [150, 150, 150], lineWidth: 0.4, overflow: 'linebreak'
         },
-        headStyles: { fillColor: [232, 238, 244], textColor: navy, fontSize: 6.2, fontStyle: 'bold' },
+        headStyles: { fillColor: [235, 235, 235], textColor: ink, fontSize: 6.2, fontStyle: 'bold' },
         columnStyles,
         didDrawPage: sarFooter
       });
@@ -5602,7 +5577,6 @@ function buildPrint() {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">Observer Mission Log</div>
             <div class="p-sub">Civil Air Patrol · sortie record</div>
@@ -5669,7 +5643,6 @@ function buildPrint() {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">Notes &amp; Observations</div>
             <div class="p-sub">${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')} · ${esc(log.aircraft || 'No tail')}</div>
@@ -5734,7 +5707,6 @@ function sarPrintPage(log, printDate) {
     <section class="print-page">
       <div class="p-head">
         <div class="p-brand">
-          <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">SAR Results Worksheet</div>
             <div class="p-sub">CAPF 104a · ${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</div>
@@ -6588,7 +6560,6 @@ async function boot() {
     navigator.storage.persist().catch(() => {});
   }
 
-  preloadPdfLogo();
   syncWakeLock();
   startNative();
 
