@@ -28,9 +28,12 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
-- **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
+- **Notes** — free text plus a sketch pad for a finger or Apple Pencil, sized to fit the screen, with a
+  full-screen button. Add as many pages as needed; each page has its own background: grid, plain, or the
+  FAA sectional, USGS topographic or USGS terrain map around the search area (saved with the page, so it
+  shows offline). The eraser removes only ink. Every page with something on it goes in the PDF.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with
-  REC in the header while it records. Shown on the chart with each checkpoint marked by its Fly button
+  REC in the header while it records. Shown on the chart (Sectional, Topo or Terrain) with each checkpoint marked by its Fly button
   icon, over the ForeFlight plan the search area was filled from (dashed, waypoints named on tap); summed
   up on Debrief, and exportable as GPX.
 - **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start

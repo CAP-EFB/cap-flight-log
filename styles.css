@@ -957,26 +957,6 @@ select.input {
 
 .sketch-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
-.sketch-mode {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.sketch-mode-label {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.sketch-mode-note {
-  font-size: 11.5px;
-  color: var(--muted);
-  line-height: 1.35;
-}
-.sketch-mode .seg button { min-height: 34px; padding: 6px 12px; font-size: 12.5px; }
 .swatch {
   width: 34px; height: 34px;
   border-radius: 6px;
@@ -1005,34 +985,48 @@ select.input {
   background: var(--sketch-bg);
   box-shadow: inset 0 0 0 1px rgba(15, 30, 45, .03);
 }
-.canvas-tip {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 2;
-  padding: 7px 10px;
-  border-radius: 6px;
-  border: 1px solid #cfdbe6;
-  background: rgba(255, 255, 255, .94);
-  color: #3d4f60;
-  font-size: 12px;
-  line-height: 1.35;
-  box-shadow: 0 2px 6px rgba(15, 30, 45, .08);
-  pointer-events: none;
+/* The page, 4:5, sized to fit the screen below the header and above the
+   tab bar: the background canvas under, the ink canvas on top. */
+.sketch-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.sketch-bar .seg button { min-height: 34px; padding: 6px 11px; font-size: 12.5px; }
+.sketch-pages { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sketch-page-label { font-size: 12.5px; font-weight: 650; color: var(--muted); min-width: 74px; text-align: center; }
+.sketch-pages .mini[disabled] { opacity: .35; pointer-events: none; }
+.icon-mini { display: inline-flex; align-items: center; justify-content: center; padding: 0 9px; }
+.icon-mini svg { width: 17px; height: 17px; }
+.sketch-stage { display: flex; justify-content: center; }
+.sketch-stage .canvas-wrap {
+  /* header (~107) + card toolbar (~120) + tab bar (~60) + a margin */
+  width: min(100%, max(300px, calc((100dvh - 330px - env(safe-area-inset-bottom)) * .8)));
+  aspect-ratio: 4 / 5;
 }
-.canvas-tip strong { color: #14212f; }
-#sketch {
+#sketch-bg, #sketch {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
-  height: auto;
-  background: #fff;
-  touch-action: pan-y;
+  height: 100%;
+}
+#sketch-bg { background: #fff; }
+#sketch {
+  touch-action: none;
   cursor: crosshair;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-body.finger-draw #sketch { touch-action: none; }
+/* full screen: the pad over everything, as large as the screen allows */
+html.sketch-full, html.sketch-full body { overflow: hidden; }
+.sketch-card.fullscreen {
+  position: fixed; inset: 0; z-index: 160;
+  margin: 0; border-radius: 0; border: 0;
+  display: flex; flex-direction: column;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  overflow: hidden;
+}
+.sketch-card.fullscreen .sketch-stage { flex: 1; min-height: 0; align-items: center; }
+.sketch-card.fullscreen .sketch-stage .canvas-wrap { width: min(100%, calc((100dvh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * .8)); }
+.sketch-card.fullscreen .sketch-hint { display: none; }
 
 .sketch-hint {
   margin-top: 8px;
@@ -1326,6 +1320,19 @@ html.pos-open, html.pos-open body { overflow: hidden; }
 .pos-recenter { right: 12px; bottom: max(16px, env(safe-area-inset-bottom)); height: 46px; padding: 0 16px; font-size: 15px; font-weight: 650; }
 .pos-recenter svg { width: 20px; height: 20px; }
 .pos-full .leaflet-bottom.leaflet-left { margin-bottom: env(safe-area-inset-bottom); }
+/* map choice: sectional, topographic, terrain */
+.pos-layers {
+  position: absolute; z-index: 500;
+  left: 50%; transform: translateX(-50%);
+  bottom: max(16px, env(safe-area-inset-bottom));
+  background: rgba(20, 28, 38, .78);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-radius: 999px; padding: 4px; gap: 2px; border: 0;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+}
+.pos-layers button { min-height: 38px; padding: 0 14px; border-radius: 999px; border: 0; background: transparent; color: rgba(242, 246, 250, .8); font-weight: 650; font-size: 13.5px; }
+.pos-layers button.active { background: #fff; color: #14212f; }
+@media (max-width: 520px) { .pos-layers { left: 64px; right: 120px; transform: none; justify-content: center; } .pos-layers button { padding: 0 9px; font-size: 12.5px; } }
 @media (max-width: 440px) { .pos-big { font-size: 24px; } .pos-panel { right: 68px; } }
 
 /* recording indicator on the Flight track card */

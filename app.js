@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.7';
+const APP_VERSION = '1.24.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -862,6 +862,58 @@ function capCellName(lat, lon) {
    reference, not navigation. Chart tiles come from the FAA's public tile
    service and need a connection; ones already viewed stay in the cache. */
 const SECTIONAL_TILES = 'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}';
+
+/* Maps for the chart and the sketch pad: the FAA sectional, and the USGS
+   National Map's topographic map and shaded relief. All three allow their
+   tiles in a canvas, so a sketch page can keep a picture of them. */
+const CHART_LAYERS = {
+  sectional: { label: 'Sectional', short: 'Sectional', url: SECTIONAL_TILES, minNative: 8, maxNative: 12,
+    source: 'FAA sectional', attribution: 'FAA AIS · not for navigation' },
+  topo: { label: 'Topographic', short: 'Topo', url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+    minNative: 0, maxNative: 16, source: 'USGS topographic map', attribution: 'USGS The National Map · not for navigation' },
+  // elevation-tinted hillshade from USGS 3DEP, drawn to order for each tile
+  terrain: { label: 'Terrain', short: 'Terrain', exportUrl: 'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage',
+    rendering: 'Hillshade Elevation Tinted',
+    minNative: 0, maxNative: 16, source: 'USGS 3DEP terrain', attribution: 'USGS 3DEP · not for navigation' }
+};
+
+const EARTH_HALF = Math.PI * 6378137;   // half the Web Mercator world, metres
+
+// A Web Mercator box (metres) drawn as a w×h image by an ArcGIS image server.
+function chartExportUrl(chart, bbox, w, h) {
+  return chart.exportUrl + '?bbox=' + bbox.map(v => v.toFixed(1)).join(',') +
+    '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=jpg&f=image' +
+    '&renderingRule=' + encodeURIComponent(JSON.stringify({ rasterFunction: chart.rendering }));
+}
+
+function chartLayerKey() {
+  return CHART_LAYERS[state && state.settings.chartLayer] ? state.settings.chartLayer : 'sectional';
+}
+
+// On a Retina screen each tile is drawn at half size from one zoom level
+// deeper (detectRetina), so the chart stays sharp instead of stretched.
+function chartTileLayer(key) {
+  const chart = CHART_LAYERS[key];
+  const retina = (window.devicePixelRatio || 1) > 1.4;
+  // an image server has no tiles: ask it for each tile's box
+  const Layer = chart.exportUrl ? L.TileLayer.extend({
+    getTileUrl(c) {
+      // the zoom the tile numbers are at (one deeper on a Retina screen)
+      const size = 2 * EARTH_HALF / Math.pow(2, this._getZoomForUrl());
+      const minX = -EARTH_HALF + c.x * size;
+      const maxY = EARTH_HALF - c.y * size;
+      return chartExportUrl(chart, [minX, maxY - size, minX + size, maxY], 256, 256);
+    }
+  }) : L.TileLayer;
+  return new Layer(chart.url || '', {
+    detectRetina: true,
+    minNativeZoom: chart.minNative ? (retina ? chart.minNative - 1 : chart.minNative) : 0,
+    maxNativeZoom: retina ? chart.maxNative - 1 : chart.maxNative,
+    minZoom: 5, maxZoom: 15,
+    keepBuffer: 3,
+    attribution: chart.attribution
+  });
+}
 let positionMap = null;
 
 // The zoom that shows the FAA chart at 100%: one chart pixel per screen pixel.
@@ -909,7 +961,10 @@ function positionSheet() {
   view.innerHTML = `<div class="pos-map" id="pos-map"></div>
     <div class="pos-panel">
       <div id="pos-text">${positionFixHTML(freshFix())}</div>
-      <div class="pos-note">FAA sectional · for reference, not navigation · needs a connection the first time an area is viewed</div>
+      <div class="pos-note" id="pos-note">${esc(CHART_LAYERS[chartLayerKey()].source)} · for reference, not navigation · needs a connection the first time an area is viewed</div>
+    </div>
+    <div class="seg pos-layers" role="group" aria-label="Map">
+      ${Object.entries(CHART_LAYERS).map(([key, chart]) => `<button type="button" data-act="chart-layer" data-value="${key}" class="${key === chartLayerKey() ? 'active' : ''}">${chart.short}</button>`).join('')}
     </div>
     <button type="button" class="pos-close" data-act="pos-close" aria-label="Close chart">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
@@ -923,23 +978,13 @@ function positionSheet() {
   if (!window.L) return;
   const log = activeLog();
   const center = fix ? [fix.lat, fix.lon] : [39.5, -98.35];
-  // The FAA serves the sectional at tile zooms 8–12; 12 is the chart's own
-  // detail. On a Retina screen each tile is drawn at half size from one zoom
-  // level deeper (detectRetina), so the chart stays sharp instead of being
-  // stretched to twice its pixels.
-  const retina = (window.devicePixelRatio || 1) > 1.4;
+  // The FAA serves the sectional at tile zooms 8–12 (12 is the chart's own
+  // detail); the USGS maps go to 16.
   const map = L.map('pos-map', {
-    zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 13, zoomSnap: 1
+    zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 15, zoomSnap: 1
   }).setView(center, fix ? chartFullZoom() : 5);
   L.control.zoom({ position: 'bottomleft' }).addTo(map);
-  L.tileLayer(SECTIONAL_TILES, {
-    detectRetina: true,
-    minNativeZoom: retina ? 7 : 8,
-    maxNativeZoom: retina ? 11 : 12,
-    minZoom: 5, maxZoom: 13,
-    keepBuffer: 3,
-    attribution: 'FAA AIS · not for navigation'
-  }).addTo(map);
+  const tiles = chartTileLayer(chartLayerKey()).addTo(map);
   // CAP grid over the chart: 15-minute grid lines with their numbers, and the
   // 7.5-minute quarters dashed when zoomed in. Redrawn for what is on screen.
   const gridLayer = L.layerGroup().addTo(map);
@@ -1000,7 +1045,7 @@ function positionSheet() {
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, dot, accuracy, follow: true, trackLine: null, checkpoints: null, plan: null, remove: () => map.remove() };
+  positionMap = { map, tiles, dot, accuracy, follow: true, trackLine: null, checkpoints: null, plan: null, remove: () => map.remove() };
   drawTrackOnMap();
   pullTrack(activeLog());
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
@@ -1489,6 +1534,40 @@ function blankRadio() {
   return { main: '', guard: '', airGround: '', airAir: '', baseCallsign: '', baseFreq: '', atis: '', ctaf: '', unicom: '', other: '' };
 }
 
+/* ---------- sketch pages ----------
+   Each page is a background (graph paper, plain, or a piece of the sectional
+   chart) with the drawing on its own transparent layer, so the background can
+   change and the eraser takes off only ink. `image` is the two flattened, for
+   the PDF and printout. */
+const SKETCH_BACKGROUNDS = [['grid', 'Grid'], ['plain', 'Plain'], ['sectional', 'Sectional'], ['topo', 'Topo'], ['terrain', 'Terrain']];
+
+function blankSketchPage(bg) {
+  return { id: uid(), bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '' };
+}
+
+function normalizeSketchPages(raw) {
+  let pages = Array.isArray(raw && raw.sketches) ? raw.sketches.filter(p => p && typeof p === 'object').map(p => ({
+    id: p.id || uid(),
+    bg: ['grid', 'plain', 'sectional', 'topo', 'terrain', 'image'].includes(p.bg) ? p.bg : 'grid',
+    bgImage: safeImage(p.bgImage),
+    map: p.map && Number.isFinite(p.map.lat) && Number.isFinite(p.map.lon) && Number.isFinite(p.map.zoom)
+      ? { lat: p.map.lat, lon: p.map.lon, zoom: p.map.zoom } : null,
+    ink: safeImage(p.ink),
+    image: safeImage(p.image)
+  })) : [];
+  // Before 1.24.0 a log had one sketch, saved flat with its grid: it becomes
+  // page 1, drawn on as its own background.
+  if (!pages.length && raw && safeImage(raw.sketch)) {
+    pages = [Object.assign(blankSketchPage('image'), { bgImage: raw.sketch, image: raw.sketch })];
+  }
+  return pages.length ? pages : [blankSketchPage()];
+}
+
+// A page worth printing: something drawn on it, or a chart under it.
+function sketchHasContent(page) {
+  return !!(safeImage(page.image) && (page.ink || page.bg === 'image' || ['sectional', 'topo', 'terrain'].includes(page.bg)));
+}
+
 function blankLog(missionId) {
   return {
     id: uid(),
@@ -1523,7 +1602,7 @@ function blankLog(missionId) {
     times: emptyTimes(),
     ops: [],
     notes: '',
-    sketch: '',
+    sketches: [blankSketchPage()],
     observations: [],
     signoff: { name: '', capid: '', dateTime: '', signature: '' },
     debrief: blankDebrief(),
@@ -1543,14 +1622,13 @@ function newState() {
     activeId: '',      // the open sortie; '' while none is
     settings: {
       theme: 'auto',
-      fingerDraw: true,
-      fingerDefaultSet: true,
       keepAwake: false,
       gpsLive: true,
       opsInterval: 30,
       hobbsPrompt: true,
       installDismissed: false,
       recordTrack: true,
+      chartLayer: 'sectional',   // the chart's map: sectional, topo or terrain
       termsAccepted: 0,
       termsAcceptedAt: 0
     },
@@ -1596,6 +1674,8 @@ function normalizeLog(raw) {
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
   log.sar = normalizeSar(raw && raw.sar);
   log.track = Array.isArray(raw && raw.track) ? raw.track.filter(p => Array.isArray(p) && p.length >= 3) : [];
+  log.sketches = normalizeSketchPages(raw);
+  delete log.sketch;
   const fpl = raw && raw.fpl;
   const fplPoints = fpl && Array.isArray(fpl.points)
     ? fpl.points.filter(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])) : [];
@@ -1703,12 +1783,11 @@ function normalizeState(raw) {
         : (newestOpen || {}).id || '';
   normalized.activeMissionId = activeMissionId;
   normalized.activeId = activeLogRaw && activeLogRaw.missionId === activeMissionId ? activeLogRaw.id : '';
-  // Finger became the sketch default in 1.3.8. State saved before that carries
-  // the old Pencil default, indistinguishable from a choice, so switch it once.
-  if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
   delete normalized.settings.coordFormat;   // the format choice was removed in 1.4.3
   delete normalized.settings.introDismissed; // the intro card was removed in 1.7.3
   delete normalized.settings.gpsAuto;        // replaced by live GPS in 1.8.0
+  delete normalized.settings.fingerDraw;     // a finger and Apple Pencil both draw since 1.24.0
+  delete normalized.settings.fingerDefaultSet;
   return normalized;
 }
 
@@ -1923,7 +2002,6 @@ function applyTheme() {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', '#1c2632');
 
-  document.body.classList.toggle('finger-draw', !!(state && state.settings.fingerDraw));
 }
 
 async function syncWakeLock() {
@@ -2086,6 +2164,11 @@ function renderWhenIdle() {
 function render() {
   if (!state) return;
   renderPending = false;
+  // the full-screen sketch pad belongs to Notes
+  if (sketchFullscreen && activeTab !== 'notes') {
+    sketchFullscreen = false;
+    document.documentElement.classList.remove('sketch-full');
+  }
   renderStrip();
   renderGpsChip();
   renderTabbar();
@@ -3165,7 +3248,25 @@ function closeSortie() {
   }
 }
 
+// The page of the sketch pad on screen, per sortie (not saved).
+const sketchPageIndex = {};
+let sketchFullscreen = false;
+
+function currentSketchPage(log) {
+  const pages = log.sketches;
+  const index = Math.min(Math.max(sketchPageIndex[log.id] || 0, 0), pages.length - 1);
+  sketchPageIndex[log.id] = index;
+  return { page: pages[index], index, count: pages.length };
+}
+
+const SKETCH_ICONS = {
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'
+};
+
 function notesView(log) {
+  const { page, index, count } = currentSketchPage(log);
+  const bg = page.bg === 'image' ? '' : page.bg;
   return `<div class="stack">
     <section class="card">
       <div class="card-head"><div class="head-left"><h2>Notes</h2></div></div>
@@ -3173,7 +3274,7 @@ function notesView(log) {
         placeholder="Narrative notes, radio traffic, coordination, anything that does not fit elsewhere.">${esc(log.notes)}</textarea>
     </section>
 
-    <section class="card">
+    <section class="card sketch-card${sketchFullscreen ? ' fullscreen' : ''}" id="sketch-card">
       <div class="card-head">
         <div class="head-left"><h2>Sketch pad</h2></div>
         <div class="sketch-tools">
@@ -3182,26 +3283,32 @@ function notesView(log) {
           <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
           <button type="button" class="mini" data-act="undo-sketch">Undo</button>
           <button type="button" class="mini" data-act="clear-sketch">Clear</button>
+          <button type="button" class="mini icon-mini" data-act="sketch-fullscreen" aria-label="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}" title="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_ICONS[sketchFullscreen ? 'shrink' : 'expand']}</svg>
+          </button>
         </div>
       </div>
-      <div class="sketch-mode">
-        <span class="sketch-mode-label">Draw with</span>
-        <div class="seg">
-          <button type="button" data-act="set-finger-mode" data-value="0" class="${state.settings.fingerDraw ? '' : 'active'}">Apple Pencil</button>
-          <button type="button" data-act="set-finger-mode" data-value="1" class="${state.settings.fingerDraw ? 'active' : ''}">Finger</button>
+      <div class="sketch-bar">
+        <div class="seg" role="group" aria-label="Background">
+          ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
         </div>
-        <span class="sketch-mode-note">${state.settings.fingerDraw ? 'Finger draws. Switch to Pencil to scroll.' : 'Pencil draws. A finger scrolls the page.'}</span>
+        <div class="sketch-pages">
+          <button type="button" class="mini" data-act="sketch-page" data-step="-1" ${index === 0 ? 'disabled' : ''} aria-label="Previous page">‹</button>
+          <span class="sketch-page-label">Page ${index + 1} of ${count}</span>
+          <button type="button" class="mini" data-act="sketch-page" data-step="1" ${index === count - 1 ? 'disabled' : ''} aria-label="Next page">›</button>
+          <button type="button" class="mini" data-act="sketch-add-page">+ Page</button>
+          <button type="button" class="mini" data-act="sketch-del-page">Delete page</button>
+        </div>
       </div>
-      <div class="canvas-wrap">
-        <canvas id="sketch" width="1000" height="1250" aria-label="Sketch pad"></canvas>
-        ${!state.settings.fingerDraw && !log.sketch ? '<div class="canvas-tip">Using a finger? Choose <strong>Finger</strong> above.</div>' : ''}
+      <div class="sketch-stage">
+        <div class="canvas-wrap">
+          <canvas id="sketch-bg" width="1000" height="1250" aria-hidden="true"></canvas>
+          <canvas id="sketch" width="1000" height="1250" aria-label="Sketch pad, page ${index + 1}"></canvas>
+        </div>
       </div>
-      <div class="sketch-hint">
-        ${state.settings.fingerDraw
-          ? 'A finger or Apple Pencil draws. Switch to Apple Pencil mode when you want a finger to scroll the page.'
-          : 'Apple Pencil draws. A finger scrolls the page. Choose Finger to sketch with a finger.'}
-        Sketches save automatically.
-      </div>
+      <div class="sketch-hint">Draw with a finger or Apple Pencil. ${CHART_LAYERS[page.bg]
+        ? 'The map is centred on the search area (or where you were) and kept with this page, so it shows offline. Not for navigation.'
+        : 'Sectional, Topo and Terrain put that map around the search area under the drawing; they need a connection the first time.'} Sketches save automatically.</div>
     </section>
   </div>`;
 }
@@ -3264,26 +3371,11 @@ function autoGrowAll() {
    Sketch & signature controllers
    ========================================================================= */
 
-function setupSketch() {
-  const canvas = $('#sketch');
-  if (!canvas) { sketchCtl = null; return; }
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width;
-  const H = canvas.height;
-  const log = activeLog();
-
-  let color = '#17222e';
-  let eraser = false;
-  let drawing = false;
-  let dirty = false;
-  let last = null;
-  let saveSketchTimer = null;
-  const undoStack = [];
-  const hadSketchAtStart = !!log.sketch;
-
-  function paintGrid() {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, W, H);
+// Paint a page's background: graph paper, plain, or its saved image.
+function paintSketchBackground(ctx, page, W, H) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  if (page.bg === 'grid') {
     ctx.lineWidth = 1;
     for (let x = 0; x <= W; x += 25) {
       ctx.strokeStyle = x % 125 === 0 ? '#c9d9e6' : '#e4edf4';
@@ -3299,25 +3391,151 @@ function setupSketch() {
       ctx.lineTo(W, y + 0.5);
       ctx.stroke();
     }
+    return Promise.resolve();
   }
+  if ((CHART_LAYERS[page.bg] || page.bg === 'image') && page.bgImage) {
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img, 0, 0, W, H); resolve(); };
+      img.onerror = () => resolve();
+      img.src = page.bgImage;
+    });
+  }
+  return Promise.resolve();
+}
 
-  function loadImage(data) {
+/* Where to centre a chart page: the search area (zoomed to fit it), else
+   the current or last GPS position, else the track. */
+function sketchMapView(log, W, H, layer) {
+  const maxZoom = layer === 'sectional' ? 12 : 14;
+  const plainZoom = layer === 'sectional' ? 11 : 12;
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)])
+    .filter(([lat, lon]) => lat != null && lon != null);
+  if (corners.length >= 2) {
+    const lats = corners.map(c => c[0]);
+    const lons = corners.map(c => c[1]);
+    const north = Math.max(...lats), south = Math.min(...lats), east = Math.max(...lons), west = Math.min(...lons);
+    let zoom = 8;
+    for (let z = maxZoom; z >= 8; z--) {
+      const a = mercatorPx(north, west, z);
+      const b = mercatorPx(south, east, z);
+      if (b.x - a.x <= W * 0.72 && b.y - a.y <= H * 0.72) { zoom = z; break; }
+    }
+    return { lat: (north + south) / 2, lon: (east + west) / 2, zoom, box: { north, south, east, west } };
+  }
+  const fix = freshFix() || lastGpsFix;
+  if (fix) return { lat: fix.lat, lon: fix.lon, zoom: plainZoom };
+  const last = log.track[log.track.length - 1];
+  if (last) return { lat: last[1], lon: last[2], zoom: plainZoom };
+  return null;
+}
+
+function mercatorPx(lat, lon, zoom) {
+  const n = 256 * Math.pow(2, zoom);
+  const sin = Math.sin(lat * Math.PI / 180);
+  return {
+    x: (lon + 180) / 360 * n,
+    y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * n
+  };
+}
+
+/* A chart (sectional, topographic or terrain) around a point, W×H pixels at
+   one tile zoom, with the search area outlined: drawn once and kept as an
+   image, so it shows offline. */
+async function renderChartImage(view, W, H, layer) {
+  const chart = CHART_LAYERS[layer];
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#e8edf1';
+  ctx.fillRect(0, 0, W, H);
+  const centre = mercatorPx(view.lat, view.lon, view.zoom);
+  const x0 = centre.x - W / 2;
+  const y0 = centre.y - H / 2;
+  const tiles = [];
+  for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + W - 1) / 256); tx++) {
+    for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + H - 1) / 256); ty++) tiles.push([tx, ty]);
+  }
+  let drawn = 0;
+  const load = (src, x, y, w, h) => new Promise(resolve => {
     const img = new Image();
-    img.onload = () => {
-      ctx.clearRect(0, 0, W, H);
-      ctx.drawImage(img, 0, 0, W, H);
-    };
-    img.src = data;
+    img.crossOrigin = 'anonymous';   // the map servers allow it, so the canvas can be saved
+    img.onload = () => { ctx.drawImage(img, x, y, w || img.width, h || img.height); drawn++; resolve(); };
+    img.onerror = () => resolve();
+    img.src = src;
+  });
+  if (chart.exportUrl) {
+    // one picture of the whole page from the image server
+    const res = 2 * EARTH_HALF / (256 * Math.pow(2, view.zoom));
+    await load(chartExportUrl(chart, [x0 * res - EARTH_HALF, EARTH_HALF - (y0 + H) * res, (x0 + W) * res - EARTH_HALF, EARTH_HALF - y0 * res], W, H), 0, 0, W, H);
+  } else {
+    await Promise.all(tiles.map(([tx, ty]) => load(chart.url.replace('{z}', view.zoom).replace('{y}', ty).replace('{x}', tx),
+      Math.round(tx * 256 - x0), Math.round(ty * 256 - y0))));
+  }
+  if (!drawn) throw new Error('no chart tiles');
+  if (view.box) {
+    const a = mercatorPx(view.box.north, view.box.west, view.zoom);
+    const b = mercatorPx(view.box.south, view.box.east, view.zoom);
+    ctx.save();
+    ctx.strokeStyle = '#d81b60';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([16, 10]);
+    ctx.strokeRect(a.x - x0, a.y - y0, b.x - a.x, b.y - a.y);
+    ctx.restore();
+  }
+  ctx.font = '600 18px -apple-system, Helvetica, sans-serif';
+  const note = chart.source + ' · not for navigation';
+  ctx.fillStyle = 'rgba(255, 255, 255, .85)';
+  ctx.fillRect(8, H - 34, ctx.measureText(note).width + 16, 26);
+  ctx.fillStyle = '#3d4f60';
+  ctx.fillText(note, 16, H - 15);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+/* The sketch pad on Notes: two stacked canvases, the page's background under
+   and its ink on top. A finger or Apple Pencil draws; the eraser removes ink
+   only; Undo steps back through the last strokes on this page. */
+function setupSketch() {
+  const canvas = $('#sketch');
+  const bgCanvas = $('#sketch-bg');
+  if (!canvas || !bgCanvas) { sketchCtl = null; return; }
+  const ctx = canvas.getContext('2d');
+  const bctx = bgCanvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const log = activeLog();
+  const { page } = currentSketchPage(log);
+
+  let color = (sketchCtl && sketchCtl.mode().color) || '#17222e';
+  let eraser = !!(sketchCtl && sketchCtl.mode().eraser);
+  let drawing = false;
+  let dirty = false;
+  let last = null;
+  let saveSketchTimer = null;
+  const undoStack = [];
+
+  function inkData() {
+    return dirty || page.ink ? canvas.toDataURL('image/png') : '';
   }
 
-  function snapshot() {
-    try {
-      undoStack.push({
-        data: canvas.toDataURL('image/jpeg', 0.7),
-        base: undoStack.length === 0 && !hadSketchAtStart && !dirty
-      });
-      if (undoStack.length > 8) undoStack.shift();
-    } catch (_) { /* ignore */ }
+  // the background and the ink as one JPEG, for the PDF and printout
+  function flatten() {
+    const flat = document.createElement('canvas');
+    flat.width = W;
+    flat.height = H;
+    const fctx = flat.getContext('2d');
+    fctx.drawImage(bgCanvas, 0, 0);
+    fctx.drawImage(canvas, 0, 0);
+    return flat.toDataURL('image/jpeg', 0.82);
+  }
+
+  function loadInk(data) {
+    ctx.clearRect(0, 0, W, H);
+    if (!data) return;
+    const img = new Image();
+    img.onload = () => { ctx.clearRect(0, 0, W, H); ctx.drawImage(img, 0, 0, W, H); };
+    img.src = data;
   }
 
   function pointFrom(event) {
@@ -3329,45 +3547,18 @@ function setupSketch() {
   }
 
   function strokeStyle() {
-    ctx.strokeStyle = eraser ? '#ffffff' : color;
-    ctx.lineWidth = eraser ? 30 : 3.4;
+    ctx.globalCompositeOperation = eraser ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = eraser ? '#000' : color;
+    ctx.lineWidth = eraser ? 36 : 5;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-  }
-
-  function onDown(event) {
-    if (event.pointerType !== 'pen' && !state.settings.fingerDraw) return;
-    if (event.button != null && event.button !== 0) return;
-    event.preventDefault();
-    const tip = canvas.parentElement.querySelector('.canvas-tip');
-    if (tip) tip.remove();
-    try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* ignore */ }
-    snapshot();
-    dirty = true;
-    drawing = true;
-    last = pointFrom(event);
-    strokeStyle();
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(last.x + 0.01, last.y + 0.01);
-    ctx.stroke();
-  }
-
-  function onMove(event) {
-    if (!drawing) return;
-    event.preventDefault();
-    const p = pointFrom(event);
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-    last = p;
   }
 
   function persist() {
     if (!dirty) return;
     try {
-      log.sketch = canvas.toDataURL('image/jpeg', 0.82);
+      page.ink = canvas.toDataURL('image/png');
+      page.image = flatten();
       save();
     } catch (err) {
       console.warn('sketch save failed', err);
@@ -3379,47 +3570,78 @@ function setupSketch() {
     saveSketchTimer = setTimeout(persist, 500);
   }
 
-  function onUp(event) {
+  canvas.addEventListener('pointerdown', event => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    try { canvas.setPointerCapture(event.pointerId); } catch (_) { /* ignore */ }
+    try {
+      undoStack.push(inkData());
+      if (undoStack.length > 12) undoStack.shift();
+    } catch (_) { /* ignore */ }
+    dirty = true;
+    drawing = true;
+    last = pointFrom(event);
+    strokeStyle();
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(last.x + 0.01, last.y + 0.01);
+    ctx.stroke();
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!drawing) return;
+    event.preventDefault();
+    const p = pointFrom(event);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  });
+  const up = event => {
     if (!drawing) return;
     drawing = false;
     last = null;
     try { canvas.releasePointerCapture(event.pointerId); } catch (_) { /* ignore */ }
     scheduleSave();
-  }
-
-  canvas.addEventListener('pointerdown', onDown);
-  canvas.addEventListener('pointermove', onMove);
-  canvas.addEventListener('pointerup', onUp);
-  canvas.addEventListener('pointercancel', onUp);
+  };
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-  if (log.sketch) loadImage(log.sketch);
-  else paintGrid();
+  loadInk(page.ink);
+  paintSketchBackground(bctx, page, W, H).then(() => {
+    // a background that just changed: refresh the page's printable image
+    if (page.reflatten) {
+      delete page.reflatten;
+      setTimeout(() => {
+        try { page.image = flatten(); save(); } catch (_) { /* ignore */ }
+      }, 120);
+    }
+  });
 
   sketchCtl = {
     mode() { return { color, eraser }; },
     setColor(next) { color = next; eraser = false; updateToolbarState(); },
     setEraser() { eraser = true; updateToolbarState(); },
     undo() {
-      const item = undoStack.pop();
-      if (!item) return;
-      if (item.base) {
-        paintGrid();
-        log.sketch = '';
-        dirty = false;
-      } else {
-        loadImage(item.data);
-        log.sketch = item.data;
-        dirty = true;
-      }
-      save();
+      if (!undoStack.length) return;
+      clearTimeout(saveSketchTimer);
+      const data = undoStack.pop();
+      loadInk(data);
+      dirty = true;
+      setTimeout(() => {
+        page.ink = data;
+        page.image = data || CHART_LAYERS[page.bg] || page.bg === 'image' ? flatten() : '';
+        save();
+      }, 60);
     },
     clear() {
-      paintGrid();
-      log.sketch = '';
+      clearTimeout(saveSketchTimer);
+      ctx.clearRect(0, 0, W, H);
       undoStack.length = 0;
       dirty = false;
-      clearTimeout(saveSketchTimer);
+      page.ink = '';
+      page.image = CHART_LAYERS[page.bg] || page.bg === 'image' ? flatten() : '';
       save();
     },
     flush() {
@@ -3427,8 +3649,45 @@ function setupSketch() {
       persist();
     }
   };
-
   updateToolbarState();
+}
+
+async function setSketchBackground(bg) {
+  const log = activeSortie();
+  if (!log) return;
+  if (sketchCtl) sketchCtl.flush();
+  const { page } = currentSketchPage(log);
+  if (page.bg === 'image' && !confirm('This page was drawn before backgrounds could change, so its drawing is part of its background. Replace it with a blank page?')) return;
+  if (page.bg === 'image') page.ink = '';
+  const chart = CHART_LAYERS[bg];
+  if (chart) {
+    const view = sketchMapView(log, 1000, 1250, bg);
+    if (!view) { toast('No position yet · fill the search area on Brief or get a GPS fix'); return; }
+    toast('Loading the ' + chart.label.toLowerCase() + ' map…');
+    try {
+      page.bgImage = await renderChartImage(view, 1000, 1250, bg);
+    } catch (err) {
+      console.warn('chart background failed', err);
+      toast('Could not load the map · it needs a connection the first time');
+      return;
+    }
+    page.map = { lat: view.lat, lon: view.lon, zoom: view.zoom };
+    toast(chart.label + (view.box ? ' around the search area' : ' around your position'));
+  } else {
+    page.bgImage = '';
+    page.map = null;
+  }
+  page.bg = bg;
+  page.reflatten = true;
+  save();
+  if (activeTab === 'notes') render();
+}
+
+function setSketchFullscreen(on) {
+  if (sketchCtl) sketchCtl.flush();
+  sketchFullscreen = on;
+  document.documentElement.classList.toggle('sketch-full', on);
+  if (activeTab === 'notes') render();
 }
 
 function setupSignature() {
@@ -4300,13 +4559,6 @@ function settingsSheet() {
         </button>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-label">Finger drawing<small>Off means one finger scrolls the sketch</small></div>
-        <button type="button" class="toggle ${settings.fingerDraw ? 'on' : ''}" data-act="toggle-finger">
-          <span class="tick">✓</span> ${settings.fingerDraw ? 'On' : 'Off'}
-        </button>
-      </div>
-
       <div class="sheet-note" style="margin-top:16px">
         Stored on this iPad. Safari can clear website data after long periods of disuse — export a backup after each mission.
       </div>
@@ -4354,7 +4606,7 @@ function helpSheet() {
             <span><strong>Observation photos</strong><span class="mi-sub">Tap Photo on an observation to use the camera or photo library. Up to six per observation; photos appear in the PDF.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>Apple Pencil</strong><span class="mi-sub">Choose <strong>Finger</strong> above the sketch pad to draw without a pencil. In Apple Pencil mode a finger scrolls the page instead of drawing.</span></span>
+            <span><strong>Sketch pad</strong><span class="mi-sub">Draw with a finger or Apple Pencil. Pick a background (grid, plain or the sectional around the search area), add pages, and tap the expand button for a full-screen pad.</span></span>
           </div>
         </div>
         <p class="sheet-note" style="margin-top:10px">
@@ -5267,8 +5519,8 @@ function buildPdfBlob() {
   }
   ny += noteH + 8;
 
-  const sketch = safeImage(log.sketch);
-  if (sketch) {
+  // every sketch page with something on it, each at the size of the first
+  log.sketches.filter(sketchHasContent).forEach(page => {
     let sw = 190;
     let sh = 238;
     if (ny + sh > 460) { sw = 160; sh = 200; }
@@ -5279,12 +5531,12 @@ function buildPdfBlob() {
     }
     const sx = (W - sw) / 2;
     try {
-      doc.addImage(sketch, 'JPEG', sx, ny, sw, sh);
+      doc.addImage(page.image, 'JPEG', sx, ny, sw, sh);
       doc.setDrawColor(170, 170, 170);
       doc.rect(sx - 2, ny - 2, sw + 4, sh + 4);
     } catch (_) { /* skip a broken image */ }
     ny += sh + 10;
-  }
+  });
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
@@ -5602,7 +5854,7 @@ function buildPrint() {
   const signature = signatureSource
     ? `<img src="${signatureSource}" alt="Signature">`
     : '&nbsp;';
-  const sketchSource = safeImage(log.sketch);
+  const sketchSources = log.sketches.filter(sketchHasContent).map(page => page.image);
 
   const printDate = fmtDateZ(new Date());
 
@@ -5693,7 +5945,7 @@ function buildPrint() {
       <div class="p-section"${wmirsReport(log).length ? '' : ' style="margin-top:0"'}>
         <div class="p-section-title">Notes / sketches</div>
         <div class="p-notes-text">${esc(log.notes || '')}</div>
-        ${sketchSource ? `<div class="p-sketch"><img src="${sketchSource}" alt="Sketch"></div>` : ''}
+        ${sketchSources.map((src, i) => `<div class="p-sketch"><img src="${src}" alt="Sketch page ${i + 1}"></div>`).join('')}
       </div>
 
       <div class="p-section">
@@ -6073,15 +6325,6 @@ const actions = {
     save();
     settingsSheet();
   },
-  'toggle-finger': () => {
-    state.settings.fingerDraw = !state.settings.fingerDraw;
-    if (sketchCtl) sketchCtl.flush();
-    if (sigCtl) sigCtl.flush();
-    applyTheme();
-    save();
-    if ($('#overlay').classList.contains('show')) settingsSheet();
-    else if (activeTab === 'notes') render();
-  },
   'sar-import-fpl': () => importForeFlightArea(),
   'fpl-toggle': el => {
     if (!fplImport) return;
@@ -6142,16 +6385,6 @@ const actions = {
     $$('button', group).forEach(btn => btn.classList.toggle('active', btn === el && value !== ''));
     save();
   },
-  'set-finger-mode': el => {
-    const next = el.dataset.value === '1';
-    if (state.settings.fingerDraw === next) return;
-    state.settings.fingerDraw = next;
-    if (sketchCtl) sketchCtl.flush();
-    if (sigCtl) sigCtl.flush();
-    applyTheme();
-    save();
-    render();
-  },
   'reset-all': () => resetAll(),
   'sign-now': () => {
     const log = activeLog();
@@ -6165,6 +6398,56 @@ const actions = {
     if (sigCtl) sigCtl.clear();
     toast('Signature cleared');
   },
+  'sketch-bg': el => setSketchBackground(el.dataset.value),
+  'sketch-fullscreen': () => setSketchFullscreen(!sketchFullscreen),
+  'sketch-page': el => {
+    const log = activeSortie();
+    if (!log) return;
+    if (sketchCtl) sketchCtl.flush();
+    sketchPageIndex[log.id] = currentSketchPage(log).index + Number(el.dataset.step);
+    render();
+  },
+  'sketch-add-page': () => {
+    const log = activeSortie();
+    if (!log) return;
+    if (sketchCtl) sketchCtl.flush();
+    const { page } = currentSketchPage(log);
+    // a new page keeps the paper (grid or plain); a map is chosen per page
+    log.sketches.push(blankSketchPage(page.bg === 'plain' ? 'plain' : 'grid'));
+    sketchPageIndex[log.id] = log.sketches.length - 1;
+    save();
+    render();
+    toast('Page ' + log.sketches.length + ' added');
+  },
+  'sketch-del-page': () => {
+    const log = activeSortie();
+    if (!log) return;
+    const { index, count } = currentSketchPage(log);
+    if (!confirm(count > 1 ? 'Delete page ' + (index + 1) + ' of the sketch pad?' : 'Clear the only page of the sketch pad, background and all?')) return;
+    if (count > 1) {
+      log.sketches.splice(index, 1);
+      sketchPageIndex[log.id] = Math.max(0, index - 1);
+    } else {
+      log.sketches = [blankSketchPage()];
+    }
+    sketchCtl = null;
+    save();
+    render();
+  },
+  'chart-layer': el => {
+    const key = el.dataset.value;
+    if (!CHART_LAYERS[key]) return;
+    state.settings.chartLayer = key;
+    save();
+    if (positionMap) {
+      if (positionMap.tiles) positionMap.map.removeLayer(positionMap.tiles);
+      positionMap.tiles = chartTileLayer(key).addTo(positionMap.map);
+      positionMap.tiles.bringToBack();
+    }
+    $$('.pos-layers [data-act="chart-layer"]').forEach(b => b.classList.toggle('active', b.dataset.value === key));
+    const note = $('#pos-note');
+    if (note) note.textContent = CHART_LAYERS[key].source + ' · for reference, not navigation · needs a connection the first time an area is viewed';
+  },
   'pen': el => {
     if (sketchCtl) sketchCtl.setColor(el.dataset.color);
   },
@@ -6175,7 +6458,7 @@ const actions = {
     if (sketchCtl) sketchCtl.undo();
   },
   'clear-sketch': () => {
-    if (!confirm('Clear the sketch pad?')) return;
+    if (!confirm('Clear the drawing on this page? Its background stays.')) return;
     if (sketchCtl) sketchCtl.clear();
   }
 };
@@ -6214,6 +6497,10 @@ document.addEventListener('click', event => {
   if (!actions[name]) return;
   event.preventDefault();
   actions[name](el, event);
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && sketchFullscreen) setSketchFullscreen(false);
 });
 
 document.addEventListener('input', event => {
