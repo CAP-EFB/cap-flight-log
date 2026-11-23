@@ -36,8 +36,18 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sketchClear", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "dictateStart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "dictateStop", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "scanText", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "scanText", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise)
     ]
+
+    /// Opens Mission Log's page in the Settings app (microphone, speech
+    /// recognition, camera, location). Apple lets an app open only its own page.
+    @objc func openSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else { call.reject("no settings"); return }
+            UIApplication.shared.open(url) { opened in call.resolve(["opened": opened]) }
+        }
+    }
 
     // MARK: notes: dictation and scanning
 

@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.37.3';
+const APP_VERSION = '1.37.4';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -4498,9 +4498,10 @@ function dictationText(text, final) {
 }
 
 async function startNoteDictation() {
-  const spot = insertIntoNotes(noteStamp(), { newLine: true });
+  const stamp = noteStamp();
+  const spot = insertIntoNotes(stamp, { newLine: true });
   if (!spot) return;
-  noteDictation = { start: spot.end, text: '', web: null };
+  noteDictation = { start: spot.end, text: '', web: null, stamp };
   renderDictateButton();
   if (NATIVE) {
     try {
@@ -4508,8 +4509,11 @@ async function startNoteDictation() {
       toast('Listening · speak, then tap Stop');
     } catch (err) {
       console.warn('[dictation]', err);
-      toast('Dictation · ' + String(err && err.message || err));
+      const message = String(err && err.message || err);
       stopNoteDictation();
+      const reason = dictationReason(message);
+      if (reason) dictationHelpSheet(reason);
+      else toast('Dictation · ' + message);
     }
     return;
   }
@@ -4532,6 +4536,13 @@ function stopNoteDictation() {
   const d = noteDictation;
   if (!d) return;
   noteDictation = null;
+  // nothing was said: take back the stamp the dictation started with
+  const area = $('#notes-text');
+  if (area && !d.text && d.stamp && area.value.slice(d.start - d.stamp.length, d.start) === d.stamp) {
+    const cut = area.value.slice(0, d.start - d.stamp.length).replace(/\n$/, '');
+    area.value = cut + area.value.slice(d.start);
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  }
   if (NATIVE) Native.MissionLog.dictateStop().catch(() => {});
   else if (d.web) { try { d.web.onend = null; d.web.stop(); } catch (_) { /* ignore */ } }
   renderDictateButton();
@@ -4550,16 +4561,58 @@ if (NATIVE) {
   Native.MissionLog.addListener('dictation', data => {
     if (data.error) {
       console.warn('[dictation]', data.error);
-      // kLSRErrorDomain 201: the iPad's own Dictation is switched off
-      toast(/kLSRErrorDomain 201|Siri and Dictation are disabled/.test(data.error)
-        ? 'Dictation is off on this iPad · turn it on in Settings › General › Keyboard › Enable Dictation'
-        : 'Dictation stopped · ' + data.error);
       stopNoteDictation();
+      // something to switch on: say what and where; anything else, the reason
+      const reason = dictationReason(data.error);
+      if (reason) dictationHelpSheet(reason);
+      else toast('Dictation stopped · ' + data.error);
       return;
     }
     if (data.text) dictationText(data.text, !!data.final);
     else if (data.final) stopNoteDictation();
   });
+}
+
+/* When the iPad will not let Mission Log listen, say what to switch on and
+   where. Apple lets an app open only its own page in Settings: that page has
+   the microphone and speech recognition switches; Dictation itself is under
+   General › Keyboard. */
+function dictationHelpSheet(reason) {
+  const steps = {
+    dictation: {
+      title: 'Turn on Dictation',
+      intro: 'Dictation is switched off on this iPad, so Mission Log cannot turn speech into text.',
+      list: ['Open <strong>Settings</strong>.', 'Go to <strong>General › Keyboard</strong>.', 'Turn on <strong>Enable Dictation</strong> (Siri can stay off).',
+        'Stay on Wi-Fi for a few minutes while the iPad downloads English speech. After that, dictation works with no signal.']
+    },
+    mic: {
+      title: 'Allow the microphone',
+      intro: 'Mission Log is not allowed to use the microphone, so it cannot hear you dictate.',
+      list: ['Tap <strong>Open Settings</strong> below.', 'Turn on <strong>Microphone</strong> for Mission Log.']
+    },
+    speech: {
+      title: 'Allow speech recognition',
+      intro: 'Mission Log is not allowed to use speech recognition.',
+      list: ['Tap <strong>Open Settings</strong> below.', 'Turn on <strong>Speech Recognition</strong> for Mission Log.']
+    }
+  }[reason];
+  if (!steps) return;
+  openSheet({
+    title: steps.title,
+    body: `<p class="sheet-note" style="margin-top:0">${steps.intro}</p>
+      <ol class="help-steps">${steps.list.map(item => `<li>${item}</li>`).join('')}</ol>
+      ${reason === 'dictation' ? '<p class="sheet-note">Open Settings takes you to Mission Log\'s page; go back a level to reach General.</p>' : ''}`,
+    footer: `<button type="button" class="btn" data-act="dictation-settings">Open Settings</button>
+      <button type="button" class="btn primary" data-act="dictation-retry">Try again</button>`
+  });
+}
+
+function dictationReason(message) {
+  const text = String(message || '');
+  if (/kLSRErrorDomain 201|Siri and Dictation are disabled/i.test(text)) return 'dictation';
+  if (/microphone/i.test(text)) return 'mic';
+  if (/speech recognition is off/i.test(text)) return 'speech';
+  return '';
 }
 
 async function scanIntoNotes() {
@@ -8542,6 +8595,8 @@ const actions = {
   },
   'note-dictate': () => { if (noteDictation) stopNoteDictation(); else startNoteDictation(); },
   'note-scan': () => scanIntoNotes(),
+  'dictation-settings': () => { if (NATIVE) Native.MissionLog.openSettings().catch(() => {}); },
+  'dictation-retry': () => { closeSheet(); if (activeTab === 'notes') startNoteDictation(); },
   'obs-pop-done': () => closeObsPop(false),
   'obs-pop-discard': () => {
     const pop = $('#obs-pop');
