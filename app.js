@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.29.0';
+const APP_VERSION = '1.30.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1691,7 +1691,7 @@ function placeFlyShell() {
   const top = Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px';
   if (shell.style.top === top) return;
   shell.style.top = top;
-  document.documentElement.style.setProperty('--fly-top', top);
+  document.documentElement.style.setProperty('--page-top', top);
   if (positionMap) positionMap.map.invalidateSize();
   placeHobbsPopover();
 }
@@ -2968,13 +2968,14 @@ function render() {
   if (!state) return;
   renderPending = false;
   // the full-screen sketch pad belongs to Notes
-  if (sketchFullscreen && activeTab !== 'notes') {
+  if (sketchFullscreen && activeTab !== 'sketch') {
     sketchFullscreen = false;
     document.documentElement.classList.remove('sketch-full');
   }
   renderStrip();
   renderGpsChip();
   renderTabbar();
+  placePageTop();
   const chip = $('#gpsChip');
   if (chip) chip.classList.toggle('open', activeTab === 'fly' && flyPosOpen);
   const view = $('#view');
@@ -2985,6 +2986,7 @@ function render() {
   // Brief…Sign are about one sortie: Missions until one is open
   if (activeTab !== 'logbook' && !activeSortie()) activeTab = 'logbook';
   if (activeTab !== 'fly' && positionMap) closePositionView();
+  document.documentElement.classList.toggle('page-full', activeTab === 'notes' || activeTab === 'sketch');
   if (activeTab === 'logbook') view.innerHTML = logbookView();
   else if (activeTab === 'plan') view.innerHTML = planView(log);
   else if (activeTab === 'fly') {
@@ -2993,6 +2995,7 @@ function render() {
     else { view.innerHTML = flyView(log); mountFlyMap(); }
   }
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
+  else if (activeTab === 'sketch') view.innerHTML = sketchView(log);
   else if (activeTab === 'debrief') view.innerHTML = debriefView(log);
   else if (activeTab === 'sign') view.innerHTML = signView(log);
 
@@ -3222,7 +3225,7 @@ function installBannerHTML() {
 /* ---------- tabs, in the order of a sortie ----------
    Plan (briefing) → Fly (in the aircraft) → Notes → Debrief (after landing) → Sign. */
 
-const TABS = ['logbook', 'plan', 'fly', 'notes', 'debrief', 'sign'];
+const TABS = ['logbook', 'plan', 'fly', 'notes', 'sketch', 'debrief', 'sign'];
 
 // Where a sortie opens: Missions until one is open, then its Brief.
 function defaultTab() {
@@ -3238,7 +3241,7 @@ function sortieReady(log) {
 
 /* ---------- missions above sorties ----------
    Missions (every mission on this iPad, each with its sorties, as in WMIRS)
-   → Brief, Fly, Notes, Debrief, Sign: one sortie, from WMIRS brief to debrief.
+   → Brief, Fly, Notes, Sketch, Debrief, Sign: one sortie, from WMIRS brief to debrief.
    Internally the first two tabs keep their old keys, 'logbook' and 'plan'. */
 const SCREENS = [];
 
@@ -4189,16 +4192,22 @@ const SKETCH_ICONS = {
   shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'
 };
 
+// Notes: one text box filling the page. It shrinks above the keyboard.
 function notesView(log) {
-  const { page, index, count } = currentSketchPage(log);
-  const bg = page.bg === 'image' ? '' : page.bg;
-  return `<div class="stack">
-    <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Notes</h2></div></div>
-      <textarea class="input notes-area" data-bind="notes" data-autogrow
+  return `<div class="page-fill">
+    <section class="card notes-card">
+      <div class="card-head"><div class="head-left"><h2>Notes</h2></div><span class="muted small">Saved as you type</span></div>
+      <textarea class="input notes-full" data-bind="notes"
         placeholder="Narrative notes, radio traffic, coordination, anything that does not fit elsewhere.">${esc(log.notes)}</textarea>
     </section>
+  </div>`;
+}
 
+// The sketch pad: the page as large as fits between the header and the tab bar.
+function sketchView(log) {
+  const { page, index, count } = currentSketchPage(log);
+  const bg = page.bg === 'image' ? '' : page.bg;
+  return `<div class="page-fill">
     <section class="card sketch-card${sketchFullscreen ? ' fullscreen' : ''}" id="sketch-card">
       <div class="card-head">
         <div class="head-left"><h2>Sketch pad</h2></div>
@@ -4418,7 +4427,7 @@ async function renderChartImage(view, W, H, layer) {
   return canvas.toDataURL('image/jpeg', 0.85);
 }
 
-/* The sketch pad on Notes: two stacked canvases, the page's background under
+/* The sketch pad (its own tab): two stacked canvases, the page's background under
    and its ink on top. A finger or Apple Pencil draws; the eraser removes ink
    only; Undo steps back through the last strokes on this page. */
 function setupSketch() {
@@ -4605,14 +4614,14 @@ async function setSketchBackground(bg) {
   page.bg = bg;
   page.reflatten = true;
   save();
-  if (activeTab === 'notes') render();
+  if (activeTab === 'sketch') render();
 }
 
 function setSketchFullscreen(on) {
   if (sketchCtl) sketchCtl.flush();
   sketchFullscreen = on;
   document.documentElement.classList.toggle('sketch-full', on);
-  if (activeTab === 'notes') render();
+  if (activeTab === 'sketch') render();
 }
 
 function setupSignature() {
@@ -7973,10 +7982,15 @@ document.addEventListener('pointerdown', event => {
 // Fly's map starts where the header ends. The header changes height on its
 // own: the GPS position arriving can push the mission and sortie onto a
 // second row. Rotating the iPad does too.
-window.addEventListener('resize', () => { if (activeTab === 'fly') placeFlyShell(); });
+function placePageTop() {
+  const bar = $('.topbar');
+  if (bar) document.documentElement.style.setProperty('--page-top', Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px');
+  if (activeTab === 'fly') placeFlyShell();
+}
+window.addEventListener('resize', placePageTop);
 if (window.ResizeObserver) {
   const topbar = document.querySelector('.topbar');
-  if (topbar) new ResizeObserver(() => { if (activeTab === 'fly') placeFlyShell(); }).observe(topbar, { box: 'border-box' });
+  if (topbar) new ResizeObserver(placePageTop).observe(topbar, { box: 'border-box' });
 }
 
 document.addEventListener('keydown', event => {

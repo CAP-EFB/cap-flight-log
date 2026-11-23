@@ -495,7 +495,6 @@ h1, h2, h3, p { margin: 0; }
 .input.centered { text-align: center; }
 
 textarea.input { min-height: 88px; resize: vertical; line-height: 1.45; }
-textarea.notes-area { min-height: 180px; }
 textarea.obs-text { min-height: 96px; }
 
 select.input {
@@ -842,7 +841,28 @@ select.input {
   border-radius: 8px;
 }
 
-/* ---------- notes & sketch ---------- */
+/* ---------- notes & sketch: each fills the page ---------- */
+
+html.page-full, html.page-full body { overflow: hidden; overscroll-behavior: none; }
+.page-fill {
+  position: fixed; left: 0; right: 0;
+  top: var(--page-top, 110px);
+  bottom: calc(58px + env(safe-area-inset-bottom));
+  z-index: 10;
+  display: flex; flex-direction: column;
+  padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
+}
+.page-fill > .card { flex: 1; min-height: 0; margin: 0 auto; width: 100%; max-width: 1100px; display: flex; flex-direction: column; }
+/* the keyboard takes the tab bar's place */
+body.keyboard-open .page-fill { bottom: 0; }
+/* the sketch pad in full screen lifts its page above the header and the tab bar */
+html.sketch-full .page-fill { z-index: 170; }
+textarea.notes-full {
+  flex: 1; min-height: 0; width: 100%;
+  resize: none;
+  font-size: 17px; line-height: 1.55;
+  padding: 14px 16px;
+}
 
 .sketch-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
@@ -883,10 +903,14 @@ select.input {
 .sketch-pages .mini[disabled] { opacity: .35; pointer-events: none; }
 .icon-mini { display: inline-flex; align-items: center; justify-content: center; padding: 0 9px; }
 .icon-mini svg { width: 17px; height: 17px; }
-.sketch-stage { display: flex; justify-content: center; }
+/* the stage takes the room left in the card; the 4:5 page is as large as fits in it */
+.sketch-stage {
+  flex: 1; min-height: 0;
+  display: flex; justify-content: center; align-items: center;
+  container-type: size;
+}
 .sketch-stage .canvas-wrap {
-  /* header (~107) + card toolbar (~120) + tab bar (~60) + a margin */
-  width: min(100%, max(300px, calc((100dvh - 330px - env(safe-area-inset-bottom)) * .8)));
+  width: min(100cqw, 80cqh);
   aspect-ratio: 4 / 5;
 }
 #sketch-bg, #sketch {
@@ -913,8 +937,6 @@ html.sketch-full, html.sketch-full body { overflow: hidden; }
   padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   overflow: hidden;
 }
-.sketch-card.fullscreen .sketch-stage { flex: 1; min-height: 0; align-items: center; }
-.sketch-card.fullscreen .sketch-stage .canvas-wrap { width: min(100%, calc((100dvh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * .8)); }
 .sketch-card.fullscreen .sketch-hint { display: none; }
 
 .sketch-hint {
@@ -1782,7 +1804,7 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 /* on Fly the bottom is the map's controls (and the Hobbs keypad): toasts drop in from the top */
-html.fly-open .toast { bottom: auto; top: calc(var(--fly-top, 110px) + 12px); transform: translate(-50%, -14px); }
+html.fly-open .toast { bottom: auto; top: calc(var(--page-top, 110px) + 12px); transform: translate(-50%, -14px); }
 html.fly-open .toast.show { transform: translate(-50%, 0); }
 .toast button {
   border: 0;

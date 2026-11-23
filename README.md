@@ -37,8 +37,9 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   beside the button, as a popover pointing at it (with tach at Engine Start and Shut Down); zoom and centre; OPS check and Log bottom left. Log
   slides up the timeline of entries and observations (up to six photos each) and the OPS checks with their
   next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
-- **Notes** — free text plus a sketch pad for a finger or Apple Pencil, sized to fit the screen, with a
-  full-screen button. Add as many pages as needed; each page has its own background: grid, plain, or the
+- **Notes** — free text, the whole page, shrinking above the keyboard.
+- **Sketch** — a sketch pad for a finger or Apple Pencil, the page as large as fits between the header and
+  the tab bar, with a full-screen button. Add as many pages as needed; each page has its own background: grid, plain, or the
   FAA sectional, USGS topographic or USGS terrain map around the search area (saved with the page, so it
   shows offline). The eraser removes only ink. Every page with something on it goes in the PDF.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with
