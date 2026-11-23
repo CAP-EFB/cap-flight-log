@@ -1059,30 +1059,78 @@ html.sketch-full, html.sketch-full body { overflow: hidden; }
   z-index: 40;
   display: flex;
   justify-content: center;
-  background: var(--chrome-bg);
+  align-items: stretch;
+  padding: 0 6px env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--chrome-bg) 94%, transparent);
+  -webkit-backdrop-filter: saturate(140%) blur(16px);
+  backdrop-filter: saturate(140%) blur(16px);
   border-top: 1px solid var(--chrome-line);
-  padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 -2px 10px rgba(5, 10, 16, .1);
 }
 .tab {
   flex: 1;
-  max-width: 200px;
+  max-width: 180px;
   height: 58px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   border: 0;
   background: none;
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 650;
-  letter-spacing: .01em;
+  letter-spacing: .02em;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .18s ease;
 }
-.tab svg { width: 22px; height: 22px; }
-.tab.active { color: var(--blue); }
-.tab:active { background: var(--card-2); }
+/* the icon sits in a pill that fills in for the open tab */
+.tab-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 30px;
+  border-radius: 15px;
+  transition: background-color .2s ease, transform .12s ease;
+}
+.tab svg { width: 22px; height: 22px; transition: stroke-width .18s ease; }
+.tab.active { color: var(--chrome-text); }
+.tab.active .tab-icon { background: color-mix(in srgb, var(--chrome-active) 22%, transparent); color: var(--chrome-active); }
+.tab.active svg { stroke-width: 2.1; }
+.tab:active .tab-icon { transform: scale(.9); background: var(--chrome-press); }
+.tab.active:active .tab-icon { background: color-mix(in srgb, var(--chrome-active) 30%, transparent); }
+.tab:focus-visible { outline: none; }
+.tab:focus-visible .tab-icon { box-shadow: 0 0 0 2px var(--chrome-active); }
+.tab-label { line-height: 1; }
+/* Missions is the mission; the rest are the open sortie's */
+.tab-sep {
+  flex: none;
+  width: 1px;
+  margin: 15px 4px;
+  background: linear-gradient(transparent, rgba(255, 255, 255, .14), transparent);
+}
+/* status dots: recording on Fly, closed on Close */
+.tab-dot {
+  position: absolute;
+  top: 1px;
+  right: 9px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--chrome-bg);
+  box-sizing: content-box;
+  display: none;
+}
+.tab.recording .tab-dot { display: block; background: #ff4d4f; animation: rec-pulse 1.6s ease-in-out infinite; }
+.tab.done .tab-dot { display: block; background: #6ad59c; }
+/* landscape and the bigger iPads: icon beside the label, like the iPadOS tab bar */
+@media (min-width: 1000px) {
+  .tab { flex-direction: row; gap: 8px; font-size: 13px; max-width: 190px; }
+  .tab-icon { width: 40px; }
+}
 
 body.keyboard-open .tabbar { display: none; }
 
@@ -1239,7 +1287,8 @@ a.menu-item { text-decoration: none; }
 .sortie-name:active { background: var(--chrome-press); }
 .card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
 /* sortie tabs stay shut until the mission has a sortie */
-.tabbar.locked .tab:not([data-tab="logbook"]) { opacity: .38; }
+.tabbar.locked .tab:not([data-tab="logbook"]) { opacity: .32; }
+.tabbar.locked .tab:not([data-tab="logbook"]):active .tab-icon { transform: none; background: none; }
 .logbook-mission.current { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
 
 .back-link {

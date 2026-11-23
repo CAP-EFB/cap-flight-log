@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.26.0';
+const APP_VERSION = '1.26.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1612,6 +1612,7 @@ function renderGpsChip() {
   $$('.gps-pipe, #gpsPipeAfter').forEach(pipe => { pipe.hidden = !shown; });
   const rec = $('#recIcon');
   if (rec) rec.hidden = !(sortie && trackSortieId === sortie.id);
+  renderTabDots();
   const fix = freshFix();
   let level = 'off';
   let text = 'GPS off';
@@ -2726,12 +2727,26 @@ function renderStrip() {
 
 function renderTabbar() {
   const bar = $('#tabbar');
-  if (bar) bar.classList.toggle('locked', !activeSortie());
+  const locked = !activeSortie();
+  if (bar) bar.classList.toggle('locked', locked);
   $$('#tabbar .tab').forEach(btn => {
     const on = btn.dataset.tab === activeTab;
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (btn.dataset.tab === 'logbook') return;
+    if (locked) btn.setAttribute('aria-disabled', 'true');
+    else btn.removeAttribute('aria-disabled');
   });
+  renderTabDots();
+}
+
+// The dots on the tabs: Fly while the track records, Close once the sortie is closed.
+function renderTabDots() {
+  const sortie = activeSortie();
+  const fly = $('#tabbar [data-tab="fly"]');
+  const close = $('#tabbar [data-tab="sign"]');
+  if (fly) fly.classList.toggle('recording', !!(sortie && trackSortieId === sortie.id));
+  if (close) close.classList.toggle('done', !!(sortie && sortie.closed));
 }
 
 /* A redraw replaces the fields on screen, which closes the keyboard. Background
