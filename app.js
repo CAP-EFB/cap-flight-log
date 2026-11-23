@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.27.2';
+const APP_VERSION = '1.28.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1686,6 +1686,7 @@ function refreshFlyView(log) {
   shell.classList.toggle('log-open', flyLogOpen);
   logEl.setAttribute('aria-hidden', flyLogOpen ? 'false' : 'true');
   drawTrackOnMap();
+  placeHobbsPopover();   // the buttons were redrawn: re-point the keypad's arrow
   return true;
 }
 
@@ -1697,7 +1698,9 @@ function placeFlyShell() {
   const top = Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px';
   if (shell.style.top === top) return;
   shell.style.top = top;
+  document.documentElement.style.setProperty('--fly-top', top);
   if (positionMap) positionMap.map.invalidateSize();
+  placeHobbsPopover();
 }
 
 function setFlyPos(open) {
@@ -5013,10 +5016,8 @@ function keypadPress(target, key) {
 // Which tach reading a checkpoint carries, if any.
 const KIND_TO_TACHKEY = { 'engine-start': 'tachStart', 'shut-down': 'tachEnd' };
 
-function hobbsSheet(entryId) {
-  const log = activeLog();
-  const entry = log.entries.find(e => e.id === entryId);
-  if (!entry) return;
+// The Hobbs reading (and tach, at Engine Start and Shut Down) a checkpoint asks for.
+function meterFieldsHTML(log, entry) {
   const tachKey = KIND_TO_TACHKEY[entry.kind];
   // Shut Down starts from the Engine Start tach, ready to be adjusted upwards.
   const tachValue = tachKey ? (log.times[tachKey] || (tachKey === 'tachEnd' ? log.times.tachStart : '') || '') : '';
@@ -5025,14 +5026,86 @@ function hobbsSheet(entryId) {
       <input class="input hobbs-big mono ${active ? 'kp-active' : ''}" id="${id}" inputmode="none" autocomplete="off"
         value="${esc(value)}" placeholder="0.0">
     </label>`;
+  return `<div class="meter-entries ${tachKey ? 'two' : ''}">
+      ${meter('k-hobbs', 'Hobbs', entry.hobbs, true)}
+      ${tachKey ? meter('k-tach', 'Tach', tachValue, false) : ''}
+    </div>`;
+}
+
+function wireMeterInputs(scope) {
+  $$('.hobbs-big', scope).forEach(input => {
+    setKeypadFresh(input, true);
+    input.addEventListener('focus', () => setMeterActive(input));
+    input.addEventListener('keydown', () => setKeypadFresh(input, false));   // hardware keyboard
+  });
+}
+
+/* On Fly, the keypad opens beside the checkpoint button that was tapped, as
+   an iPad popover with its arrow on the button; the map stays in view. */
+function hobbsPopover(entryId, anchor) {
+  const log = activeLog();
+  const entry = log.entries.find(e => e.id === entryId);
+  const shell = $('#fly-shell');
+  if (!entry || !shell || !anchor) return false;
+  closeHobbsPopover(false);
+  const tachKey = KIND_TO_TACHKEY[entry.kind];
+  const pop = document.createElement('div');
+  pop.className = 'kp-pop';
+  pop.id = 'kp-pop';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', (tachKey ? 'Hobbs and tach' : 'Hobbs') + ' for ' + entry.event);
+  pop.dataset.kind = entry.kind;
+  pop.innerHTML = `<div class="kp-pop-head"><strong>${esc(entry.event)}</strong><span class="mono">${esc(fmtZ(entry.time))}</span></div>
+    ${meterFieldsHTML(log, entry)}
+    ${keypadHTML('#kp-pop .kp-active')}
+    <div class="kp-pop-foot">
+      <button type="button" class="btn" data-act="kp-pop-skip">Skip</button>
+      <button type="button" class="btn primary" id="k-next" data-act="${tachKey ? 'hobbs-next' : 'save-hobbs'}" data-id="${esc(entry.id)}">${tachKey ? 'Next: tach' : 'Save'}</button>
+    </div>
+    <span class="kp-pop-arrow" aria-hidden="true"></span>`;
+  shell.appendChild(pop);
+  wireMeterInputs(pop);
+  placeHobbsPopover();
+  return true;
+}
+
+// Beside the button, to its left, as high as fits; the arrow points at the button.
+function placeHobbsPopover() {
+  const pop = $('#kp-pop');
+  const shell = $('#fly-shell');
+  if (!pop || !shell) return;
+  const anchor = $('.fly-cp[data-kind="' + pop.dataset.kind + '"]');
+  if (!anchor) return;
+  const box = shell.getBoundingClientRect();
+  const a = anchor.getBoundingClientRect();
+  const h = pop.offsetHeight;
+  const mid = a.top + a.height / 2 - box.top;
+  const top = Math.max(8, Math.min(box.height - h - 8, mid - h / 2));
+  pop.style.top = top + 'px';
+  pop.style.right = (box.right - a.left + 14) + 'px';
+  pop.querySelector('.kp-pop-arrow').style.top = Math.max(16, Math.min(h - 16, mid - top)) + 'px';
+  anchor.classList.add('kp-anchor');
+}
+
+function closeHobbsPopover(redraw) {
+  const pop = $('#kp-pop');
+  if (!pop) return false;
+  pop.remove();
+  $$('.fly-cp.kp-anchor').forEach(el => el.classList.remove('kp-anchor'));
+  if (redraw !== false) render();
+  return true;
+}
+
+function hobbsSheet(entryId) {
+  const log = activeLog();
+  const entry = log.entries.find(e => e.id === entryId);
+  if (!entry) return;
+  const tachKey = KIND_TO_TACHKEY[entry.kind];
   openSheet({
     title: tachKey ? 'Hobbs &amp; tach' : 'Hobbs',
     sub: entry.event + ' · ' + fmtZ(entry.time),
     body: `
-      <div class="meter-entries ${tachKey ? 'two' : ''}">
-        ${meter('k-hobbs', 'Hobbs', entry.hobbs, true)}
-        ${tachKey ? meter('k-tach', 'Tach', tachValue, false) : ''}
-      </div>
+      ${meterFieldsHTML(log, entry)}
       ${keypadHTML('#overlay .kp-active')}
       <div class="sheet-note" style="text-align:center">${tachKey
         ? 'Type Hobbs, then Next for tach. On G1000 aircraft tach is ENG HOURS (ENGINE, then SYSTEM).'
@@ -5042,16 +5115,12 @@ function hobbsSheet(entryId) {
       <button type="button" class="btn primary" id="k-next" data-act="${tachKey ? 'hobbs-next' : 'save-hobbs'}" data-id="${esc(entry.id)}">${tachKey ? 'Next: tach' : 'Save'}</button>`,
     onClose: () => render()
   });
-  $$('#overlay .hobbs-big').forEach(input => {
-    setKeypadFresh(input, true);
-    input.addEventListener('focus', () => setMeterActive(input));
-    input.addEventListener('keydown', () => setKeypadFresh(input, false));   // hardware keyboard
-  });
+  wireMeterInputs($('#overlay'));
 }
 
 // Point the keypad at one of the two readings; the footer button follows.
 function setMeterActive(input) {
-  $$('#overlay .hobbs-big').forEach(el => el.classList.toggle('kp-active', el === input));
+  $$('.hobbs-big', input.closest('#kp-pop, #overlay') || document).forEach(el => el.classList.toggle('kp-active', el === input));
   const next = $('#k-next');
   if (!next || !$('#k-tach')) return;
   const onTach = input.id === 'k-tach';
@@ -5084,7 +5153,7 @@ function saveHobbsFromSheet(entryId) {
     if (tachKey && tach != null) log.times[tachKey] = tach;
     save();
   }
-  closeSheet();
+  if (!closeHobbsPopover()) closeSheet();
 }
 
 function openEntrySheet(entryId, preset) {
@@ -5515,8 +5584,12 @@ function quickLog(kind, label) {
   render();
   if (!fix && state.settings.gpsLive) autoGpsEntry(entry);
   haptic('MEDIUM');
-  if (state.settings.hobbsPrompt) hobbsSheet(entry.id);
+  if (state.settings.hobbsPrompt) {
+    const anchor = activeTab === 'fly' && $('.fly-cp[data-kind="' + kind + '"]');
+    if (!hobbsPopover(entry.id, anchor)) hobbsSheet(entry.id);
+  }
   toast(label + ' logged at ' + fmtZ(entry.time), 'Undo', () => {
+    closeHobbsPopover(false);
     log.entries = log.entries.filter(e => e.id !== entry.id);
     log.times = beforeTimes;
     save();
@@ -7194,6 +7267,7 @@ const actions = {
     if (panel.hidden) target.focus(); else target.blur();
   },
   'save-hobbs': el => saveHobbsFromSheet(el.dataset.id),
+  'kp-pop-skip': () => closeHobbsPopover(),
   'hobbs-next': () => {
     const tach = $('#k-tach');
     if (tach) setMeterActive(tach);
@@ -7702,6 +7776,13 @@ document.addEventListener('focusout', () => {
   }, 0);
 });
 
+// A tap anywhere off the Hobbs popover puts it away, as Skip does.
+document.addEventListener('pointerdown', event => {
+  const pop = $('#kp-pop');
+  // no redraw: the reading is unchanged, and the button under the finger must stay for its click
+  if (pop && !pop.contains(event.target) && !event.target.closest('#toast')) closeHobbsPopover(false);
+}, true);
+
 // Fly's map starts where the header ends. The header changes height on its
 // own: the GPS position arriving can push the mission and sortie onto a
 // second row. Rotating the iPad does too.
@@ -7714,6 +7795,7 @@ if (window.ResizeObserver) {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     if ($('#overlay').classList.contains('show')) closeSheet();
+    else if (closeHobbsPopover()) { /* skipped the reading */ }
     else if (activeTab === 'fly' && flyLogOpen) setFlyLog(false);
     else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   }

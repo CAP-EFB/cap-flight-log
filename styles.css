@@ -1417,6 +1417,53 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
 .fly-shell .leaflet-control-attribution { margin-bottom: 0 !important; opacity: .75; }
 .fly-shell .leaflet-bottom.leaflet-right { bottom: 0; right: 0; }
 
+/* the Hobbs keypad, as a popover beside the checkpoint button */
+.kp-pop {
+  position: absolute; z-index: 700;
+  width: 300px;
+  padding: 12px 12px 12px;
+  border-radius: 18px;
+  background: rgba(24, 33, 44, .9);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .4);
+  color: #f2f6fa;
+  /* light-on-dark versions of the tokens the keypad uses */
+  --text: #f2f6fa; --muted: rgba(242, 246, 250, .65); --line: rgba(255, 255, 255, .14);
+  --card-2: rgba(255, 255, 255, .08); --input-bg: rgba(0, 0, 0, .25); --blue: #8cc8ff;
+  --blue-soft: rgba(78, 168, 245, .25); --focus: rgba(78, 168, 245, .45);
+  animation: kpIn .16s ease-out;
+}
+@keyframes kpIn { from { opacity: 0; transform: translateX(8px) scale(.97); } }
+.kp-pop-arrow {
+  position: absolute; right: -8px;
+  width: 16px; height: 16px; margin-top: -8px;
+  background: rgba(24, 33, 44, .9);
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  border-right: 1px solid rgba(255, 255, 255, .12);
+  transform: rotate(45deg);
+}
+.kp-pop-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px 10px; font-size: 14px; }
+.kp-pop-head span { color: #8ee6b4; font-weight: 700; }
+.kp-pop .meter-entries { max-width: none; }
+.kp-pop .input.hobbs-big { min-height: 54px; font-size: 28px; background: var(--input-bg); color: #fff; border-color: var(--line); }
+.kp-pop .meter-entries.two .input.hobbs-big { font-size: 22px; min-height: 50px; }
+.kp-pop .input.fresh { background: rgba(78, 168, 245, .22); border-color: #4ea8f5; }
+.kp-pop .keypad { gap: 6px; margin-top: 10px; max-width: none; }
+.kp-pop .key { min-height: 46px; font-size: 22px; border-radius: 10px; }
+.kp-pop .key.aux { font-size: 14px; }
+.kp-pop-foot { display: flex; gap: 8px; margin-top: 10px; }
+.kp-pop-foot .btn { flex: 1; min-height: 44px; }
+.kp-pop-foot .btn:not(.primary) { background: rgba(255, 255, 255, .1); color: #fff; border-color: rgba(255, 255, 255, .14); }
+.fly-cp.kp-anchor { border-color: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, .6), 0 4px 16px rgba(0, 0, 0, .22); }
+@media (max-height: 640px) {
+  .kp-pop { width: 280px; padding: 10px; }
+  .kp-pop .key { min-height: 38px; font-size: 19px; }
+  .kp-pop .input.hobbs-big { min-height: 44px; font-size: 22px; }
+  .kp-pop-head { margin-bottom: 6px; }
+}
+
 /* the flight log slides up over the map */
 .fly-log {
   position: absolute; left: 0; right: 0; bottom: 0;
@@ -1665,6 +1712,9 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
   transition: opacity .18s ease, transform .18s ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+/* on Fly the bottom is the map's controls (and the Hobbs keypad): toasts drop in from the top */
+html.fly-open .toast { bottom: auto; top: calc(var(--fly-top, 110px) + 12px); transform: translate(-50%, -14px); }
+html.fly-open .toast.show { transform: translate(-50%, 0); }
 .toast button {
   border: 0;
   background: none;
