@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.33.0';
+const APP_VERSION = '1.34.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2316,7 +2316,7 @@ const SKETCH_BACKGROUNDS = [['grid', 'Grid'], ['plain', 'Plain'], ['sectional', 
 // A page is 1000 points wide; its height follows the shape of the screen it
 // was started on (1250 for pages from before 1.32.0).
 function blankSketchPage(bg) {
-  return { id: uid(), w: 1000, h: 1250, bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '', strokes: [] };
+  return { id: uid(), w: 1000, h: 1250, bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '', strokes: [], region: null };
 }
 
 function sketchSize(page) {
@@ -2341,6 +2341,10 @@ function normalizeSketchPages(raw) {
     pk: typeof p.pk === 'string' && /^[A-Za-z0-9+/=]*$/.test(p.pk) ? p.pk : '',
     inkBase: safeImage(p.inkBase),
     strokes: normalizeStrokes(p.strokes),   // lines on a map page, in latitude and longitude
+    // a map page's PencilKit region: Web Mercator pixels at zoom zb, from (ox, oy), w × h
+    region: p.region && ['zb', 'ox', 'oy', 'w', 'h'].every(k => Number.isFinite(p.region[k])) ? {
+      zb: p.region.zb, ox: p.region.ox, oy: p.region.oy, w: p.region.w, h: p.region.h
+    } : null,
     w: 1000,
     h: Math.min(2400, Math.max(300, Math.round(Number(p.h) || 1250)))
   })) : [];
@@ -4231,7 +4235,7 @@ function sketchToolsHTML(log) {
   const { page, index, count } = currentSketchPage(log);
   const bg = page.bg === 'image' ? '' : page.bg;
   const mapPage = isMapSketchPage(page);
-  const penTools = mapPage
+  const penTools = mapPage && !NATIVE
     ? `<div class="sk-glass sk-pens" role="group" aria-label="Tool">
         <button type="button" class="sk-btn sk-hand${mapSketchTool === 'pan' ? ' on' : ''}" data-act="sketch-pan" aria-label="Move the map" title="Move the map (the Pencil still draws)">${sketchIcon('hand')}</button>
         ${MAP_PENS.map(([c, label]) => `<button type="button" class="swatch${mapSketchTool === 'pen' && mapSketchColor === c ? ' active' : ''}" style="background:${c}" data-act="pen" data-color="${c}" aria-label="${label}" title="${label}"></button>`).join('')}
@@ -4249,7 +4253,7 @@ function sketchToolsHTML(log) {
       ${penTools}
       <div class="sk-glass">
         <button type="button" class="sk-btn" data-act="undo-sketch" aria-label="Undo" title="Undo">${sketchIcon('undo')}</button>
-        ${NATIVE && !mapPage ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
+        ${NATIVE ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
         <button type="button" class="sk-btn" data-act="clear-sketch" aria-label="Clear the drawing" title="Clear the drawing">${sketchIcon('clear')}</button>
       </div>
       <span class="sk-spacer"></span>
@@ -4282,10 +4286,10 @@ function sketchView(log) {
   if (isMapSketchPage(page)) {
     return `<div class="sketch-shell" id="sketch-card">
         <div class="sketch-map${mapSketchTool === 'pan' ? '' : ' drawing'}" id="sketch-map" aria-label="Map page ${index + 1}"></div>
-        <div class="sk-mapzoom">
+        ${NATIVE ? '' : `<div class="sk-mapzoom">
           <button type="button" class="fly-round" data-act="sketch-zoom" data-step="1" aria-label="Zoom in">${flyIcon('plus')}</button>
           <button type="button" class="fly-round" data-act="sketch-zoom" data-step="-1" aria-label="Zoom out">${flyIcon('minus')}</button>
-        </div>
+        </div>`}
       </div>`;
   }
   return `<div class="sketch-shell" id="sketch-card">
@@ -4491,9 +4495,10 @@ let mapSketch = null;            // the open map page: { map, page, layer, strok
 let mapSketchTool = 'pan';       // pan, pen, eraser (what a finger does)
 let mapSketchColor = '#d81b60';
 
-// A map page that is drawn on live: a chart background, and no older picture-ink.
+// A map page that is drawn on live: a chart background, and no older picture-ink
+// (PencilKit ink on a map page is kept with its map region).
 function isMapSketchPage(page) {
-  return !!CHART_LAYERS[page.bg] && !page.ink && !page.pk && !page.inkBase;
+  return !!CHART_LAYERS[page.bg] && !page.ink && !page.inkBase && (!page.pk || !!page.region);
 }
 
 function normalizeStrokes(raw) {
@@ -4737,6 +4742,172 @@ async function snapshotMapSketch(ms) {
   save();
 }
 
+/* ---------- map pages in the iPad app: PencilKit over the live map ----------
+   The PencilKit canvas is the page's region of the map: Web Mercator pixels
+   at zoom MAP_REGION_ZOOM, MAP_REGION_SIZE square, centred where the page
+   started. Fingers pan and pinch the canvas; every frame it reports where it
+   is, and the web map under it (display only) is set to the same place, so
+   the chart and the ink move as one. The drawing is stored in that region's
+   coordinates (page.pk with page.region), so it stays on the ground. The
+   page's picture is the chart on screen with the ink on screen over it. */
+const MAP_REGION_ZOOM = 12;
+const MAP_REGION_SIZE = 12000;   // about 340 km across at New England's latitude
+
+function mapRegionFor(page, lat, lon) {
+  if (page.region) return page.region;
+  const c = L.CRS.EPSG3857.latLngToPoint(L.latLng(lat, lon), MAP_REGION_ZOOM);
+  page.region = { zb: MAP_REGION_ZOOM, ox: Math.round(c.x - MAP_REGION_SIZE / 2), oy: Math.round(c.y - MAP_REGION_SIZE / 2), w: MAP_REGION_SIZE, h: MAP_REGION_SIZE };
+  return page.region;
+}
+
+// Where the canvas is (offset in points at a scale) as a map centre and zoom.
+function viewportToMap(region, v) {
+  const s = v.scale;
+  const cx = region.ox + (v.x + v.width / 2) / s;
+  const cy = region.oy + (v.y + v.height / 2) / s;
+  const at = L.CRS.EPSG3857.pointToLatLng(L.point(cx, cy), region.zb);
+  return { lat: at.lat, lon: at.lng, zoom: region.zb + Math.log2(s) };
+}
+
+function mapToViewport(region, lat, lon, zoom, width, height) {
+  const s = Math.pow(2, zoom - region.zb);
+  const c = L.CRS.EPSG3857.latLngToPoint(L.latLng(lat, lon), region.zb);
+  return { scale: s, offsetX: (c.x - region.ox) * s - width / 2, offsetY: (c.y - region.oy) * s - height / 2 };
+}
+
+let nativeMapSketch = null;   // { map, page, region } while a map page shows in the app
+
+if (NATIVE) {
+  Native.MissionLog.addListener('sketchViewport', v => {
+    const nm = nativeMapSketch;
+    if (!nm || v.pageId !== nm.page.id) return;
+    const at = viewportToMap(nm.region, v);
+    nm.map.setView([at.lat, at.lon], at.zoom, { animate: false });
+  });
+}
+
+function closeNativeMapSketch() {
+  if (!nativeMapSketch) return;
+  nativeMapSketch.map.remove();
+  nativeMapSketch = null;
+}
+
+function setupNativeMapSketch(page) {
+  const el = $('#sketch-map');
+  if (!el || !window.L) return;
+  closeNativeMapSketch();
+  closeMapSketch();
+  const log = activeLog();
+  const room = el.getBoundingClientRect();
+  if (!page.pk && !page.strokes.length && room.width > 100 && room.height > 100) {
+    page.w = 1000;
+    page.h = Math.min(2400, Math.max(300, Math.round(1000 * room.height / room.width)));
+  }
+  const start = page.map || (() => {
+    const view = sketchMapView(log, 1000, sketchSize(page).h, page.bg);
+    return view ? { lat: view.lat, lon: view.lon, zoom: view.zoom } : { lat: 39.5, lon: -98.35, zoom: 7 };
+  })();
+  const region = mapRegionFor(page, start.lat, start.lon);
+  // the map only shows: the canvas over it takes the fingers
+  const map = L.map(el, {
+    zoomControl: false, attributionControl: true, zoomSnap: 0, minZoom: 3, maxZoom: 16,
+    dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, tap: false
+  }).setView([start.lat, start.lon], start.zoom);
+  chartTileLayer(page.bg).addTo(map);
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)]);
+  if (corners.every(([a, b]) => a != null && b != null)) {
+    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.06, dashArray: '6 4', interactive: false }).addTo(map);
+  }
+  if (log.fpl && log.fpl.points.length > 1) {
+    L.polyline(log.fpl.points.map(p => [p[0], p[1]]), { color: '#0a47c2', weight: 3, dashArray: '10 6', opacity: 0.8, interactive: false }).addTo(map);
+  }
+  // lines drawn on this page in a browser stay visible under the PencilKit ink
+  const renderer = L.canvas({ padding: 0.5 });
+  const lines = page.strokes.map(stroke => L.polyline(stroke.p, { color: stroke.c, weight: strokeWeight(stroke, start.zoom), lineCap: 'round', renderer, interactive: false }).addTo(map));
+  map.on('zoom', () => lines.forEach((line, i) => line.setStyle({ weight: strokeWeight(page.strokes[i], map.getZoom()) })));
+  nativeMapSketch = { map, page, region };
+
+  const rect = sketchRect();
+  if (!rect) return;
+  // zoom 7 to 15 of the chart, but never smaller than the region
+  const minScale = Math.max(Math.pow(2, 7 - region.zb), rect.width / region.w, rect.height / region.h);
+  const v = mapToViewport(region, start.lat, start.lon, Math.max(start.zoom, region.zb + Math.log2(minScale)), rect.width, rect.height);
+  nativeSketchOn = true;
+  Native.MissionLog.sketchShow(Object.assign({
+    pageId: page.id, drawing: page.pk || '', background: '', pageWidth: region.w, pageHeight: region.h,
+    mode: 'map', scale: v.scale, offsetX: v.offsetX, offsetY: v.offsetY, minScale, maxScale: Math.pow(2, 15 - region.zb)
+  }, rect)).then(() => {
+    if ($('#overlay').classList.contains('show')) nativeSketchVisible(false);
+  }).catch(err => console.warn('sketch', err));
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      const r = sketchRect();
+      if (r && nativeSketchOn && activeTab === 'sketch') { Native.MissionLog.sketchFrame(r).catch(() => {}); map.invalidateSize(); }
+    }).observe(el);
+  }
+  sketchCtl = {
+    native: true,
+    map: true,
+    mode() { return { color: '', eraser: false }; },
+    setColor() {},
+    setEraser() {},
+    undo() { Native.MissionLog.sketchUndo().catch(() => {}); },
+    redo() { Native.MissionLog.sketchRedo().catch(() => {}); },
+    clear() {
+      page.strokes = [];
+      lines.forEach(line => line.remove());
+      lines.length = 0;
+      save();
+      Native.MissionLog.sketchClear().catch(() => {});
+    },
+    flush() {}
+  };
+  setTimeout(() => map.invalidateSize(), 60);
+}
+
+// A map page changed in the app (a stroke, or the map settled somewhere new):
+// keep the drawing and where the map is, and redraw the page's picture.
+async function applyNativeMapSketch(data) {
+  const page = state.logs.flatMap(l => l.sketches).find(p => p.id === data.pageId);
+  if (!page || !page.region || !data.viewport) return;
+  page.pk = data.drawing || '';
+  const v = data.viewport;
+  const at = viewportToMap(page.region, v);
+  page.map = at;
+  const vw = Math.round(v.width);
+  const vh = Math.round(v.height);
+  // the chart at the nearest tile zoom, scaled to the fractional zoom on screen
+  const tz = Math.max(5, Math.min(CHART_LAYERS[page.bg].maxNative || 15, Math.round(at.zoom)));
+  const k = Math.pow(2, tz - at.zoom);
+  const log = state.logs.find(l => l.sketches.includes(page));
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)])
+    .filter(([a, b]) => a != null && b != null);
+  const box = corners.length >= 2 ? {
+    north: Math.max(...corners.map(q => q[0])), south: Math.min(...corners.map(q => q[0])),
+    east: Math.max(...corners.map(q => q[1])), west: Math.min(...corners.map(q => q[1]))
+  } : null;
+  let chart = null;
+  try { chart = await loadImg(await renderChartImage({ lat: at.lat, lon: at.lon, zoom: tz, box }, Math.round(vw * k), Math.round(vh * k), page.bg)); } catch (_) { /* offline and not saved */ }
+  const ink = await loadImg(data.ink);
+  const screen = document.createElement('canvas');
+  screen.width = vw;
+  screen.height = vh;
+  const ctx = screen.getContext('2d');
+  ctx.fillStyle = '#e8edf1';
+  ctx.fillRect(0, 0, vw, vh);
+  if (chart) ctx.drawImage(chart, 0, 0, vw, vh);
+  if (ink) ctx.drawImage(ink, 0, 0, vw, vh);
+  const { w: W, h: H } = sketchSize(page);
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const octx = out.getContext('2d');
+  const scale = Math.max(W / vw, H / vh);
+  octx.drawImage(screen, (W - vw * scale) / 2, (H - vh * scale) / 2, vw * scale, vh * scale);
+  page.image = out.toDataURL('image/jpeg', 0.85);
+  save();
+}
+
 /* ---------- the sketch pad in the iPad app: PencilKit ----------
    The app puts Apple's PencilKit canvas over the page: the tool palette (pens,
    marker, pencil, eraser, lasso, ruler, colours), pressure and tilt, palm
@@ -4809,7 +4980,9 @@ async function applyNativeSketch(data) {
 }
 
 if (NATIVE) {
-  Native.MissionLog.addListener('sketchChanged', data => { applyNativeSketch(data).catch(err => console.warn('sketch', err)); });
+  Native.MissionLog.addListener('sketchChanged', data => {
+    (data.mode === 'map' ? applyNativeMapSketch(data) : applyNativeSketch(data)).catch(err => console.warn('sketch', err));
+  });
 }
 
 function hideNativeSketch() {
@@ -4873,10 +5046,13 @@ function setupNativeSketch(page, W, H) {
    only; Undo steps back through the last strokes on this page. */
 function setupSketch() {
   if ($('#sketch-map')) {
-    setupMapSketch(currentSketchPage(activeLog()).page);
+    const { page } = currentSketchPage(activeLog());
+    // in the app, PencilKit over the map; in a browser, lines drawn on the map
+    if (NATIVE) setupNativeMapSketch(page); else setupMapSketch(page);
     return;
   }
   closeMapSketch();
+  if (NATIVE) closeNativeMapSketch();
   if (mapSketchTool !== 'pan' && !$('#sketch')) mapSketchTool = 'pan';   // back to moving next time
   const canvas = $('#sketch');
   const bgCanvas = $('#sketch-bg');
@@ -5089,7 +5265,7 @@ function setSketchBackground(bg) {
   const toMap = !!CHART_LAYERS[bg];
   const isMap = isMapSketchPage(page);
   if (page.bg === bg) return;
-  const drawn = isMap ? page.strokes.length > 0 : !sketchPageBlank(page) || page.bg === 'image';
+  const drawn = isMap ? page.strokes.length > 0 || !!page.pk : !sketchPageBlank(page) || page.bg === 'image';
   if (toMap && isMap) {
     page.bg = bg;
     page.image = '';
@@ -5104,6 +5280,8 @@ function setSketchBackground(bg) {
     page.bgImage = '';
     page.image = '';
     page.strokes = [];
+    page.pk = '';
+    page.region = null;
     if (!toMap) page.map = null;
   }
   save();
@@ -8271,7 +8449,7 @@ const actions = {
     const { page } = currentSketchPage(log);
     // a new page keeps the kind of this one: the same paper, or the same map where it is now
     const fresh = blankSketchPage(isMapSketchPage(page) ? page.bg : page.bg === 'plain' ? 'plain' : 'grid');
-    if (isMapSketchPage(page) && page.map) fresh.map = Object.assign({}, page.map);
+    if (isMapSketchPage(page) && page.map) fresh.map = Object.assign({}, page.map);   // its own region is made there
     log.sketches.push(fresh);
     sketchPageIndex[log.id] = log.sketches.length - 1;
     save();

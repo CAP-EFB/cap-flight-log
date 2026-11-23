@@ -48,10 +48,19 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         let drawing = call.getString("drawing") ?? ""
         let background = call.getString("background") ?? ""
         let size = CGSize(width: call.getDouble("pageWidth") ?? 1000, height: call.getDouble("pageHeight") ?? 1250)
+        // a map page: the canvas is the map's region, panned and zoomed like the map
+        var map: SketchPad.MapView? = nil
+        if call.getString("mode") == "map" {
+            map = SketchPad.MapView(
+                scale: CGFloat(call.getDouble("scale") ?? 1),
+                offset: CGPoint(x: call.getDouble("offsetX") ?? 0, y: call.getDouble("offsetY") ?? 0),
+                minScale: CGFloat(call.getDouble("minScale") ?? 0.05),
+                maxScale: CGFloat(call.getDouble("maxScale") ?? 8))
+        }
         DispatchQueue.main.async {
             guard let host = self.bridge?.webView else { call.reject("no web view"); return }
             SketchPad.shared.plugin = self
-            SketchPad.shared.show(in: host, frame: frame, pageId: pageId, size: size, drawing: drawing, background: background)
+            SketchPad.shared.show(in: host, frame: frame, pageId: pageId, size: size, drawing: drawing, background: background, map: map)
             call.resolve()
         }
     }
@@ -91,8 +100,15 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// A page's strokes changed: its PencilKit drawing (to edit again) and its
     /// ink as a transparent PNG the page's size (for the PDF and printout).
-    func sketchChanged(pageId: String, drawing: String, ink: String) {
-        notifyListeners("sketchChanged", data: ["pageId": pageId, "drawing": drawing, "ink": ink])
+    func sketchChanged(pageId: String, drawing: String, ink: String, viewport: [String: Any]? = nil) {
+        var data: [String: Any] = ["pageId": pageId, "drawing": drawing, "ink": ink]
+        if let viewport = viewport { data["viewport"] = viewport; data["mode"] = "map" }
+        notifyListeners("sketchChanged", data: data)
+    }
+
+    /// A map page moved: where the canvas is now, for the map under it to follow.
+    func sketchViewport(_ viewport: [String: Any]) {
+        notifyListeners("sketchViewport", data: viewport)
     }
 
     // MARK: flight recorder
@@ -293,7 +309,19 @@ final class TrackRecorder: NSObject, CLLocationManagerDelegate {
 /// screen and pinch-zoomable up to five times), the page's background in an image view under the strokes, and
 /// Apple's tool picker. Whether a finger draws follows the iPad's own
 /// "Only Draw with Apple Pencil" setting.
+///
+/// On a map page the canvas is the map's region instead (Web Mercator pixels
+/// at one zoom), transparent, over the web map: its pan and zoom are the
+/// map's, reported on every frame so the map follows, and the ink sent back
+/// is the part on screen.
 final class SketchPad: NSObject, PKCanvasViewDelegate {
+    struct MapView {
+        var scale: CGFloat
+        var offset: CGPoint
+        var minScale: CGFloat
+        var maxScale: CGFloat
+    }
+    private var map: MapView?
     static let shared = SketchPad()
     weak var plugin: MissionLogPlugin?
     private var canvas: PKCanvasView?
@@ -334,10 +362,11 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         return view
     }
 
-    func show(in host: UIView, frame: CGRect, pageId: String, size: CGSize, drawing: String, background: String) {
+    func show(in host: UIView, frame: CGRect, pageId: String, size: CGSize, drawing: String, background: String, map: MapView? = nil) {
         let view = canvas ?? makeCanvas(in: host)
         if view.superview !== host { host.addSubview(view) }
-        if pageId != self.pageId || size != page {
+        let opening = pageId != self.pageId || size != page
+        if opening {
             flush()
             self.pageId = pageId
             page = size
@@ -351,13 +380,32 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
             loading = false
             fitted = false
         }
-        setBackground(background)
-        setFrame(frame)
+        self.map = map
+        underlay.isHidden = map != nil   // the web map shows through
+        if map == nil { setBackground(background) }
+        if let map = map, opening {
+            view.frame = frame
+            view.minimumZoomScale = map.minScale
+            view.maximumZoomScale = map.maxScale
+            view.zoomScale = map.scale
+            layoutUnderlay()
+            view.contentOffset = map.offset
+            fitted = true
+        } else {
+            setFrame(frame)
+        }
         setVisible(true)
+        reportViewport()
     }
 
     func setFrame(_ frame: CGRect) {
         guard let view = canvas, frame.width > 0, frame.height > 0 else { return }
+        if map != nil {
+            // a map page keeps its place; only the window onto it changes
+            view.frame = frame
+            reportViewport()
+            return
+        }
         let fit = frame.width / page.width
         // keep how far in the crew had zoomed when the page moves or resizes
         let zoom = fitted ? view.zoomScale / max(view.minimumZoomScale, 0.0001) : 1
@@ -391,6 +439,7 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         setVisible(false)
         canvas?.removeFromSuperview()
         pageId = ""
+        map = nil
     }
 
     func undo() { canvas?.undoManager?.undo() }
@@ -407,14 +456,43 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
     }
 
     // the background follows the strokes as they zoom and scroll
-    func scrollViewDidZoom(_ scrollView: UIScrollView) { layoutUnderlay() }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        layoutUnderlay()
+        reportViewport()
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { reportViewport() }
+
+    // a map page's picture is the view on screen: send it once the map settles
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settled() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { settled() } }
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { settled() }
+
+    private func settled() {
+        guard map != nil else { return }
+        schedule(after: 0.8)
+    }
+
+    private func viewport() -> [String: Any]? {
+        guard let view = canvas, map != nil else { return nil }
+        return ["pageId": pageId, "x": Double(view.contentOffset.x), "y": Double(view.contentOffset.y),
+                "scale": Double(view.zoomScale), "width": Double(view.bounds.width), "height": Double(view.bounds.height)]
+    }
+
+    private func reportViewport() {
+        if let v = viewport() { plugin?.sketchViewport(v) }
+    }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard !loading else { return }
+        schedule(after: 0.6)
+    }
+
+    private func schedule(after seconds: Double) {
         pending?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.send() }
         pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     private func flush() {
@@ -432,6 +510,21 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
+        if map != nil {
+            // the ink on screen, at screen size, with where the screen is
+            let z = max(view.zoomScale, 0.0001)
+            let visible = CGRect(x: view.contentOffset.x / z, y: view.contentOffset.y / z,
+                                 width: view.bounds.width / z, height: view.bounds.height / z)
+            UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+                image = UIGraphicsImageRenderer(size: view.bounds.size, format: format).image { _ in
+                    drawing.image(from: visible, scale: z).draw(in: CGRect(origin: .zero, size: view.bounds.size))
+                }
+            }
+            let ink = drawing.strokes.isEmpty ? "" : "data:image/png;base64," + (image.pngData()?.base64EncodedString() ?? "")
+            plugin?.sketchChanged(pageId: pageId, drawing: drawing.strokes.isEmpty ? "" : drawing.dataRepresentation().base64EncodedString(),
+                                  ink: ink, viewport: viewport())
+            return
+        }
         // rendered in light mode, so black ink stays black in the PDF
         UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
             image = UIGraphicsImageRenderer(size: page, format: format).image { _ in
