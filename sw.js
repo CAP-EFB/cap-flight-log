@@ -1,5 +1,5 @@
 /* Mission Log service worker — cache-first so the app works with no signal. */
-const CACHE = 'observer-log-v1.14.0';
+const CACHE = 'observer-log-v1.37.4';
 
 const ASSETS = [
   './',
@@ -7,7 +7,11 @@ const ASSETS = [
   './styles.css',
   './app.js',
   './vendor/jspdf.umd.min.js',
+  './vendor/leaflet/leaflet.js',
+  './vendor/leaflet/leaflet.css',
   './vendor/jspdf.plugin.autotable.min.js',
+  './vendor/pdf-lib.min.js',
+  './vendor/capf104.pdf',
   './manifest.webmanifest',
   './icons/icon-180.png',
   './icons/icon-192.png',
