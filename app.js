@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.1';
+const APP_VERSION = '1.23.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1000,7 +1000,7 @@ function positionSheet() {
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, dot, accuracy, follow: true, trackLine: null, checkpoints: null, remove: () => map.remove() };
+  positionMap = { map, dot, accuracy, follow: true, trackLine: null, checkpoints: null, plan: null, remove: () => map.remove() };
   drawTrackOnMap();
   pullTrack(activeLog());
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
@@ -1026,13 +1026,22 @@ function checkpointPosition(log, entry) {
   return best && best.gap <= 120000 ? [best.p[1], best.p[2]] : null;
 }
 
-// The track, with each checkpoint marked by its Fly button's icon.
+// The track, with each checkpoint marked by its Fly button's icon, over the
+// ForeFlight plan the search area came from.
 function drawTrackOnMap(fit) {
   if (!positionMap || !window.L) return;
   const log = activeLog();
   const pts = log.track.map(p => [p[1], p[2]]);
   if (positionMap.trackLine) positionMap.trackLine.remove();
   if (positionMap.checkpoints) positionMap.checkpoints.remove();
+  if (positionMap.plan) positionMap.plan.remove();
+  // the ForeFlight plan, dashed, under the track; each waypoint named on tap
+  const plan = log.fpl && log.fpl.points.length ? log.fpl.points : [];
+  positionMap.plan = plan.length ? L.featureGroup([
+    L.polyline(plan.map(p => [p[0], p[1]]), { color: '#1d5fa8', weight: 2.5, opacity: 0.85, dashArray: '7 6' }),
+    ...plan.map(p => L.circleMarker([p[0], p[1]], { radius: 4, color: '#1d5fa8', weight: 2, fillColor: '#fff', fillOpacity: 1 })
+      .bindTooltip(p[2] || 'Waypoint', { direction: 'top', offset: [0, -4] }))
+  ]).addTo(positionMap.map) : null;
   positionMap.trackLine = pts.length > 1
     ? L.polyline(pts, { color: '#d81b60', weight: 3, opacity: 0.9 }).addTo(positionMap.map)
     : null;
@@ -1051,9 +1060,10 @@ function drawTrackOnMap(fit) {
       .bindTooltip(label + (entry.time ? ' · ' + fmtZ(entry.time) : ''), { direction: 'top', offset: [0, -14] });
   }).filter(Boolean);
   positionMap.checkpoints = markers.length ? L.featureGroup(markers).addTo(positionMap.map) : null;
-  if (fit && (positionMap.trackLine || positionMap.checkpoints)) {
-    const bounds = positionMap.trackLine ? positionMap.trackLine.getBounds() : positionMap.checkpoints.getBounds();
-    if (positionMap.checkpoints) bounds.extend(positionMap.checkpoints.getBounds());
+  const layers = [positionMap.trackLine, positionMap.checkpoints, positionMap.plan].filter(Boolean);
+  if (fit && layers.length) {
+    const bounds = L.latLngBounds([]);
+    layers.forEach(layer => bounds.extend(layer.getBounds()));
     positionMap.follow = false;
     positionMap.map.fitBounds(bounds, { padding: [32, 32], maxZoom: chartFullZoom() });
   }
@@ -1514,7 +1524,9 @@ function blankLog(missionId) {
     debrief: blankDebrief(),
     sar: blankSar(),
     // flight track: [time ms, lat, lon, altitude m, accuracy m, speed m/s, course °]
-    track: []
+    track: [],
+    // the ForeFlight plan the search area came from: { name, points: [[lat, lon, identifier]] }
+    fpl: null
   };
 }
 
@@ -1577,6 +1589,10 @@ function normalizeLog(raw) {
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
   log.sar = normalizeSar(raw && raw.sar);
   log.track = Array.isArray(raw && raw.track) ? raw.track.filter(p => Array.isArray(p) && p.length >= 3) : [];
+  const fpl = raw && raw.fpl;
+  const fplPoints = fpl && Array.isArray(fpl.points)
+    ? fpl.points.filter(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])) : [];
+  log.fpl = fplPoints.length ? { name: String(fpl.name || ''), points: fplPoints } : null;
   log.navAids = Array.isArray(raw && raw.navAids) && raw.navAids.length
     ? raw.navAids.map(n => Object.assign({ ident: '', freq: '', radial: '' }, n || {}))
     : base.navAids;
@@ -2525,6 +2541,7 @@ function saveAddSortie() {
     log.exit = deepClone(prev.exit);
     ['reporter', 'reporterCapid', 'areaName'].forEach(key => { log.sar[key] = prev.sar[key]; });
     log.sar.corners = deepClone(prev.sar.corners);
+    log.fpl = prev.fpl ? deepClone(prev.fpl) : null;
     log.signoff.name = prev.signoff.name;
     log.signoff.capid = prev.signoff.capid;
   }
@@ -2673,7 +2690,10 @@ function planView(log) {
     <section class="card">
       <div class="card-head">
         <div class="head-left"><h2>Search area</h2></div>
-        <button class="btn small" data-act="sar-import-fpl">Import from ForeFlight</button>
+        <div class="btn-row" style="margin:0">
+          ${log.fpl ? '<button class="btn small" data-act="track-map">Show on chart</button>' : ''}
+          <button class="btn small" data-act="sar-import-fpl">Import from ForeFlight</button>
+        </div>
       </div>
       <div class="note-strip" style="margin-top:0;margin-bottom:12px">
         To fill the corners from a ForeFlight search pattern: in ForeFlight open the flight plan, tap Edit, Send To, Share FPL File and save it to Files, then import that file here.
@@ -6075,19 +6095,26 @@ const actions = {
     SAR_CORNERS.forEach(([key]) => {
       sar.corners[key] = { lat: fmtCoord(corners[key][0], true), lon: fmtCoord(corners[key][1], false) };
     });
+    // keep the whole plan, in order, to draw on the chart with the track
+    activeLog().fpl = { name: fplImport.name || '', points: fplImport.points.map(pt => [pt.lat, pt.lon, pt.id || '']) };
     save();
     closeSheet();
+    if (activeTab === 'plan') render();
     toast('Search area corners filled from ForeFlight');
   },
   'sar-clear-corners': () => {
-    const sar = activeLog().sar;
+    const log = activeLog();
+    const sar = log.sar;
     const previous = deepClone(sar.corners);
-    if (!sarHasData(previous)) return;
+    const previousPlan = log.fpl;
+    if (!sarHasData(previous) && !previousPlan) return;
     sar.corners = blankSar().corners;
+    log.fpl = null;
     save();
     render();
     toast('Search area corners cleared', 'Undo', () => {
       sar.corners = previous;
+      log.fpl = previousPlan;
       save();
       if (activeTab === 'plan') render();
     });

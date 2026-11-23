@@ -30,7 +30,8 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with
   REC in the header while it records. Shown on the chart with each checkpoint marked by its Fly button
-  icon, summed up on Debrief, and exportable as GPX.
+  icon, over the ForeFlight plan the search area was filled from (dashed, waypoints named on tap); summed
+  up on Debrief, and exportable as GPX.
 - **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start
   and Shut Down) and the checkpoint times, Hobbs and tach end/start/total with Hobbs In Area and To/From,
   fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
