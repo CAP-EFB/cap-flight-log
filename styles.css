@@ -1726,3 +1726,24 @@ body.keyboard-open .fab { display: none; }
 }
 .cp-pin.custom { color: #1d5fa8; border-color: #1d5fa8; }
 .cp-pin svg { width: 16px; height: 16px; }
+
+/* Brief › Offline maps */
+.map-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.map-row-text { flex: 1; min-width: 0; }
+.map-row-text .small { margin-top: 2px; }
+.map-row-btns { display: flex; gap: 8px; flex-shrink: 0; }
+.map-progress {
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 3px;
+  background: var(--card-2);
+  overflow: hidden;
+}
+.map-progress span { display: block; height: 100%; background: var(--blue-btn); transition: width .2s; }
+.warn-text { color: var(--amber); }

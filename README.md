@@ -36,6 +36,11 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   REC in the header while it records. Shown on the chart (Sectional, Topo or Terrain) with each checkpoint marked by its Fly button
   icon, over the ForeFlight plan the search area was filled from (dashed, waypoints named on tap); summed
   up on Debrief, and exportable as GPX.
+- **Offline maps** — Brief › Offline maps saves the Sectional (and, if wanted, Topo and Terrain) around the
+  search area, entry and exit points and ForeFlight route, 10 nm around them, in the app's own storage
+  (IndexedDB, not in backups). The chart and sketch pad use saved tiles first, then the network, then a
+  saved tile from a zoom level or more up, enlarged. A sectional saved more than 56 days ago is flagged
+  for a fresh save. Deleting a sortie deletes its maps; tiles are shared between sorties.
 - **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start
   and Shut Down) and the checkpoint times, Hobbs and tach end/start/total with Hobbs In Area and To/From,
   fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
@@ -57,7 +62,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   from the menu.
 - **Feedback** — Menu → Send feedback opens the feedback form (https://forms.gle/EBEkXN8LNWNPL8VG7).
 - **Offline** — a service worker caches the whole app. After the first load it works with no
-  signal. Data never leaves the iPad unless you export it.
+  signal. Maps work offline where they were saved (see Offline maps). Data never leaves the iPad unless you export it.
 
 ## Install on the iPad
 

@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.24.0';
+const APP_VERSION = '1.25.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -860,7 +860,7 @@ function capCellName(lat, lon) {
    Tapping the GPS readout in the header: the position in large type, in every
    format, with the CAP grid and cell, on the FAA sectional chart. For
    reference, not navigation. Chart tiles come from the FAA's public tile
-   service and need a connection; ones already viewed stay in the cache. */
+   service and need a connection, unless the sortie saved them (Offline maps). */
 const SECTIONAL_TILES = 'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}';
 
 /* Maps for the chart and the sketch pad: the FAA sectional, and the USGS
@@ -890,22 +890,163 @@ function chartLayerKey() {
   return CHART_LAYERS[state && state.settings.chartLayer] ? state.settings.chartLayer : 'sectional';
 }
 
+// One tile of a chart layer: the map server's own tile, or for an image
+// server the picture of that tile's box.
+function chartTileUrl(layer, z, x, y) {
+  const chart = CHART_LAYERS[layer];
+  if (chart.exportUrl) {
+    const size = 2 * EARTH_HALF / Math.pow(2, z);
+    const minX = -EARTH_HALF + x * size;
+    const maxY = EARTH_HALF - y * size;
+    return chartExportUrl(chart, [minX, maxY - size, minX + size, maxY], 256, 256);
+  }
+  return chart.url.replace('{z}', z).replace('{y}', y).replace('{x}', x);
+}
+
+/* ---------- maps saved for offline use ----------
+   Brief › Offline maps downloads the tiles around a sortie's search area,
+   entry and exit points and ForeFlight route into the app's own storage. The
+   chart and the sketch pad look there first, then the network, then a saved
+   tile from a few zoom levels up, enlarged, so the map never goes blank where
+   it was saved. Tiles are shared between sorties; the list of what each
+   sortie saved is kept beside them. */
+const MAP_DB = 'mission-log-maps';
+// the tile zooms saved for each map: the sectional's own detail stops at 12
+const MAP_ZOOMS = { sectional: [8, 12], topo: [6, 14], terrain: [6, 13] };
+const MAP_MARGIN_NM = 10;
+const MAP_AROUND_ME_NM = 25;
+const SECTIONAL_CYCLE_DAYS = 56;   // the FAA replaces the sectional every 56 days
+let mapDbPromise = null;
+let savedMapAreas = {};            // "sortieId:layer" → what was saved (no tile list)
+let mapSaveJob = null;             // the download in progress, if any
+
+function openMapDb() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  if (!mapDbPromise) {
+    mapDbPromise = new Promise(resolve => {
+      let req;
+      try {
+        req = indexedDB.open(MAP_DB, 1);
+      } catch (_) {
+        resolve(null);
+        return;
+      }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('tiles')) db.createObjectStore('tiles');
+        if (!db.objectStoreNames.contains('areas')) db.createObjectStore('areas');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    });
+  }
+  return mapDbPromise;
+}
+
+// Run fn(stores…) in one transaction; resolves with fn's result once it commits.
+async function mapTx(names, mode, fn) {
+  const db = await openMapDb();
+  if (!db) throw new Error('no storage');
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(names, mode);
+    let result;
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('aborted'));
+    result = fn(...names.map(name => tx.objectStore(name)));
+  });
+}
+
+const idbReq = req => new Promise((resolve, reject) => {
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+});
+
+function tileKey(layer, z, x, y) {
+  return layer + '/' + z + '/' + x + '/' + y;
+}
+
+// A saved tile as a Blob, or null.
+async function savedTile(key) {
+  try {
+    const db = await openMapDb();
+    if (!db) return null;
+    const rec = await idbReq(db.transaction('tiles').objectStore('tiles').get(key));
+    return rec && rec.data ? new Blob([rec.data], { type: rec.type || 'image/png' }) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function loadImage(src, cors) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (cors) img.crossOrigin = 'anonymous';   // the map servers allow it, so a canvas can be saved
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image failed'));
+    img.src = src;
+  });
+}
+
+async function blobImage(blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    return await loadImage(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* Draw tile z/x/y of a layer into ctx at (dx, dy), size px square: the saved
+   tile, else the network's, else a saved tile from up to five zoom levels
+   up, enlarged. Resolves to where it came from, or '' when nothing drew. */
+async function drawChartTile(ctx, layer, z, x, y, dx, dy, size) {
+  const saved = await savedTile(tileKey(layer, z, x, y));
+  if (saved) {
+    try {
+      ctx.drawImage(await blobImage(saved), dx, dy, size, size);
+      return 'saved';
+    } catch (_) { /* a broken record: try the network */ }
+  }
+  if (navigator.onLine !== false) {
+    try {
+      ctx.drawImage(await loadImage(chartTileUrl(layer, z, x, y), true), dx, dy, size, size);
+      return 'network';
+    } catch (_) { /* no signal, or no tile there */ }
+  }
+  for (let d = 1; d <= 5 && z - d >= 0; d++) {
+    const blob = await savedTile(tileKey(layer, z - d, x >> d, y >> d));
+    if (!blob) continue;
+    try {
+      const img = await blobImage(blob);
+      const part = img.width / Math.pow(2, d);
+      const sx = (x - ((x >> d) << d)) * part;
+      const sy = (y - ((y >> d) << d)) * part;
+      ctx.drawImage(img, sx, sy, part, part, dx, dy, size, size);
+      return 'enlarged';
+    } catch (_) { /* keep looking */ }
+  }
+  return '';
+}
+
 // On a Retina screen each tile is drawn at half size from one zoom level
 // deeper (detectRetina), so the chart stays sharp instead of stretched.
+const ChartTileLayer = window.L ? L.TileLayer.extend({
+  createTile(coords, done) {
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 256;
+    drawChartTile(tile.getContext('2d'), this.options.chartKey, this._getZoomForUrl(), coords.x, coords.y, 0, 0, 256)
+      .then(from => done(from ? null : new Error('no tile'), tile));
+    return tile;
+  }
+}) : null;
+
 function chartTileLayer(key) {
   const chart = CHART_LAYERS[key];
   const retina = (window.devicePixelRatio || 1) > 1.4;
-  // an image server has no tiles: ask it for each tile's box
-  const Layer = chart.exportUrl ? L.TileLayer.extend({
-    getTileUrl(c) {
-      // the zoom the tile numbers are at (one deeper on a Retina screen)
-      const size = 2 * EARTH_HALF / Math.pow(2, this._getZoomForUrl());
-      const minX = -EARTH_HALF + c.x * size;
-      const maxY = EARTH_HALF - c.y * size;
-      return chartExportUrl(chart, [minX, maxY - size, minX + size, maxY], 256, 256);
-    }
-  }) : L.TileLayer;
-  return new Layer(chart.url || '', {
+  return new ChartTileLayer('', {
+    chartKey: key,
     detectRetina: true,
     minNativeZoom: chart.minNative ? (retina ? chart.minNative - 1 : chart.minNative) : 0,
     maxNativeZoom: retina ? chart.maxNative - 1 : chart.maxNative,
@@ -914,6 +1055,324 @@ function chartTileLayer(key) {
     attribution: chart.attribution
   });
 }
+
+/* What a sortie's offline maps cover: the search area (filled in), the entry
+   and exit points and the ForeFlight route, 10 nm around each. With none of
+   those, 25 nm around where the iPad is. */
+function offlineMapShape(log) {
+  const pts = [];
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)])
+    .filter(([lat, lon]) => lat != null && lon != null);
+  const boxes = [];
+  if (corners.length >= 2) {
+    const lats = corners.map(c => c[0]);
+    const lons = corners.map(c => c[1]);
+    boxes.push({ north: Math.max(...lats), south: Math.min(...lats), east: Math.max(...lons), west: Math.min(...lons) });
+  }
+  [log.entry, log.exit].forEach(p => {
+    const lat = parseLat(p.lat);
+    const lon = parseLon(p.lon);
+    if (lat != null && lon != null) pts.push([lat, lon]);
+  });
+  const route = log.fpl && Array.isArray(log.fpl.points) ? log.fpl.points.map(p => [p[0], p[1]]) : [];
+  const parts = [];
+  if (boxes.length) parts.push('the search area');
+  if (pts.length) parts.push(pts.length > 1 ? 'the entry and exit points' : 'the entry or exit point');
+  if (route.length) parts.push('the ForeFlight route');
+  if (parts.length) {
+    return { boxes, points: pts, route, margin: MAP_MARGIN_NM,
+      label: parts.join(parts.length > 2 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1') + ', plus ' + MAP_MARGIN_NM + ' nm around' };
+  }
+  const fix = freshFix() || lastGpsFix;
+  if (fix) return { boxes: [], points: [[fix.lat, fix.lon]], route: [], margin: MAP_AROUND_ME_NM, label: MAP_AROUND_ME_NM + ' nm around your position' };
+  return null;
+}
+
+// The tiles at zoom z covering a shape: [[x, y], …].
+function shapeTiles(shape, z) {
+  const n = Math.pow(2, z);
+  const seen = new Set();
+  const out = [];
+  const tileOf = (lat, lon) => {
+    const p = mercatorPx(Math.max(-85, Math.min(85, lat)), lon, z);
+    return [p.x / 256, p.y / 256];
+  };
+  // the margin in tiles at a latitude: a Mercator tile is cos(lat) shorter on the ground
+  const marginTiles = lat => shape.margin * 1852 / Math.cos(lat * Math.PI / 180) / (2 * EARTH_HALF / n);
+  const addRect = (x0, y0, x1, y1) => {
+    for (let x = Math.max(0, Math.floor(x0)); x <= Math.min(n - 1, Math.floor(x1)); x++) {
+      for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(n - 1, Math.floor(y1)); y++) {
+        const key = x + '/' + y;
+        if (!seen.has(key)) { seen.add(key); out.push([x, y]); }
+      }
+    }
+  };
+  const addAround = (lat, lon) => {
+    const [x, y] = tileOf(lat, lon);
+    const m = marginTiles(lat);
+    addRect(x - m, y - m, x + m, y + m);
+  };
+  shape.boxes.forEach(b => {
+    const [x0, y0] = tileOf(b.north, b.west);
+    const [x1, y1] = tileOf(b.south, b.east);
+    const m = marginTiles(Math.max(Math.abs(b.north), Math.abs(b.south)));
+    addRect(x0 - m, y0 - m, x1 + m, y1 + m);
+  });
+  shape.points.forEach(([lat, lon]) => addAround(lat, lon));
+  shape.route.forEach((p, i) => {
+    addAround(p[0], p[1]);
+    const next = shape.route[i + 1];
+    if (!next) return;
+    // walk the leg in steps of a quarter of the margin
+    const [ax, ay] = tileOf(p[0], p[1]);
+    const [bx, by] = tileOf(next[0], next[1]);
+    const len = Math.hypot(bx - ax, by - ay);
+    const step = Math.max(0.25, marginTiles(p[0]) / 4);
+    const count = Math.min(5000, Math.ceil(len / step));
+    for (let s = 1; s < count; s++) {
+      const f = s / count;
+      addAround(p[0] + (next[0] - p[0]) * f, p[1] + (next[1] - p[1]) * f);
+    }
+  });
+  return out;
+}
+
+function offlineMapTiles(layer, shape) {
+  const [lo, hi] = MAP_ZOOMS[layer];
+  const tiles = [];
+  for (let z = lo; z <= hi; z++) shapeTiles(shape, z).forEach(([x, y]) => tiles.push([z, x, y]));
+  return tiles;
+}
+
+// PNG or JPEG by its first bytes (the FAA labels its tiles as plain data).
+function imageType(data) {
+  const b = new Uint8Array(data, 0, Math.min(4, data.byteLength));
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
+  return '';
+}
+
+function fmtBytes(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(bytes >= 10485760 ? 0 : 1) + ' MB';
+  return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
+function areaKey(sortieId, layer) {
+  return sortieId + ':' + layer;
+}
+
+// Read what every sortie saved into memory (without the tile lists), and
+// drop the maps of sorties that no longer exist.
+async function loadSavedMapAreas() {
+  try {
+    const db = await openMapDb();
+    if (!db) return;
+    const list = await idbReq(db.transaction('areas').objectStore('areas').getAll());
+    savedMapAreas = {};
+    const orphans = [];
+    list.forEach(area => {
+      if (!state.logs.some(l => l.id === area.sortieId)) { orphans.push(area); return; }
+      const { tiles, ...meta } = area;
+      savedMapAreas[areaKey(area.sortieId, area.layer)] = meta;
+    });
+    if (orphans.length) await pruneSavedMaps();
+    renderOfflineMapsCard();
+  } catch (err) {
+    console.warn('saved maps unavailable', err);
+  }
+}
+
+// Delete the saved areas of sorties that are gone, and every tile no
+// remaining area uses.
+async function pruneSavedMaps() {
+  try {
+    const db = await openMapDb();
+    if (!db) return;
+    const areas = await idbReq(db.transaction('areas').objectStore('areas').getAll());
+    const keep = new Set();
+    const gone = [];
+    areas.forEach(area => {
+      if (state.logs.some(l => l.id === area.sortieId)) (area.tiles || []).forEach(k => keep.add(k));
+      else gone.push(areaKey(area.sortieId, area.layer));
+    });
+    const tileKeys = await idbReq(db.transaction('tiles').objectStore('tiles').getAllKeys());
+    await mapTx(['areas', 'tiles'], 'readwrite', (areaStore, tileStore) => {
+      gone.forEach(key => areaStore.delete(key));
+      tileKeys.forEach(key => { if (!keep.has(key)) tileStore.delete(key); });
+    });
+    gone.forEach(key => { delete savedMapAreas[key]; });
+  } catch (err) {
+    console.warn('could not tidy saved maps', err);
+  }
+}
+
+async function deleteOfflineMap(log, layer) {
+  try {
+    await mapTx(['areas'], 'readwrite', areas => areas.delete(areaKey(log.id, layer)));
+    delete savedMapAreas[areaKey(log.id, layer)];
+    await pruneSavedMaps();
+  } catch (err) {
+    console.warn(err);
+  }
+  renderOfflineMapsCard();
+  toast(CHART_LAYERS[layer].label + ' map deleted from this iPad');
+}
+
+/* Download a sortie's tiles for one map. Tiles saved in the last day are
+   kept (so Save again after a break picks up where it stopped); everything
+   else is fetched again. */
+async function saveOfflineMap(log, layer) {
+  if (mapSaveJob) { toast('Already saving a map'); return; }
+  const shape = offlineMapShape(log);
+  if (!shape) { toast('Fill in the search area or share the flight plan first'); return; }
+  const tiles = offlineMapTiles(layer, shape);
+  const guess = tiles.length * (layer === 'sectional' ? 30000 : 22000);
+  if (tiles.length > 3000 && !confirm('That is ' + tiles.length.toLocaleString() + ' map tiles, about ' + fmtBytes(guess) +
+    '. Save them on this iPad?')) return;
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+  const abort = new AbortController();
+  const job = mapSaveJob = { sortieId: log.id, layer, total: tiles.length, done: 0, missing: 0, abort };
+  renderOfflineMapsCard();
+  const keys = [];
+  let bytes = 0;
+  let lastPaint = 0;
+  const now = Date.now();
+  let i = 0;
+  const worker = async () => {
+    while (i < tiles.length && !abort.signal.aborted) {
+      const [z, x, y] = tiles[i++];
+      const key = tileKey(layer, z, x, y);
+      try {
+        const db = await openMapDb();
+        const have = await idbReq(db.transaction('tiles').objectStore('tiles').get(key));
+        if (have && now - have.at < 86400000) {
+          keys.push(key);
+          bytes += have.data.byteLength;
+        } else {
+          const res = await fetch(chartTileUrl(layer, z, x, y), { mode: 'cors', signal: abort.signal });
+          if (res.ok) {
+            const data = await res.arrayBuffer();
+            const type = imageType(data);
+            if (type) {
+              await mapTx(['tiles'], 'readwrite', store => store.put({ data, type, at: Date.now() }, key));
+              keys.push(key);
+              bytes += data.byteLength;
+            }
+          } else if (res.status !== 404) {
+            job.missing++;   // 404: the map has nothing there (off the chart's edge)
+          }
+        }
+      } catch (_) {
+        if (!abort.signal.aborted) job.missing++;
+      }
+      job.done++;
+      if (Date.now() - lastPaint > 250) { lastPaint = Date.now(); renderOfflineMapsCard(); }
+    }
+  };
+  // the terrain server draws each tile to order; ask it more gently
+  await Promise.all(Array.from({ length: layer === 'terrain' ? 3 : 6 }, worker));
+  mapSaveJob = null;
+
+  if (abort.signal.aborted) {
+    renderOfflineMapsCard();
+    toast('Stopped saving the ' + CHART_LAYERS[layer].label + ' map · what was downloaded is kept until you delete it or save again');
+    if (keys.length) await recordArea(log, layer, shape, keys, bytes, job.total - keys.length);
+    return;
+  }
+  if (!keys.length) {
+    renderOfflineMapsCard();
+    toast('Could not download the ' + CHART_LAYERS[layer].label + ' map · check the connection');
+    return;
+  }
+  await recordArea(log, layer, shape, keys, bytes, job.missing);
+  toast(CHART_LAYERS[layer].label + ' map saved for offline use · ' + fmtBytes(bytes) +
+    (job.missing ? ' · ' + job.missing + (job.missing === 1 ? ' tile' : ' tiles') + ' missing, Save again to retry' : ''));
+}
+
+async function recordArea(log, layer, shape, keys, bytes, missing) {
+  const area = { sortieId: log.id, layer, savedAt: Date.now(), count: keys.length, bytes, missing, label: shape.label, tiles: keys };
+  try {
+    await mapTx(['areas'], 'readwrite', areas => areas.put(area, areaKey(log.id, layer)));
+    const { tiles, ...meta } = area;
+    savedMapAreas[areaKey(log.id, layer)] = meta;
+    await pruneSavedMaps();   // a smaller area this time frees the old tiles
+  } catch (err) {
+    console.warn(err);
+    toast('Could not save the map · the iPad may be out of storage');
+  }
+  renderOfflineMapsCard();
+}
+
+function savedMapAge(area) {
+  return Math.floor((Date.now() - area.savedAt) / 86400000);
+}
+
+// The line under the chart: what it is, and whether this sortie saved it.
+function chartNoteText(layer) {
+  const log = activeSortie();
+  const area = log && savedMapAreas[areaKey(log.id, layer)];
+  const chart = CHART_LAYERS[layer];
+  if (area) return chart.source + ' · saved for offline use ' + new Date(area.savedAt).toLocaleDateString() + ' · for reference, not navigation';
+  return chart.source + ' · for reference, not navigation · save it on Brief › Offline maps to use it with no signal';
+}
+
+function offlineMapsInner(log) {
+  const shape = offlineMapShape(log);
+  const rows = Object.keys(CHART_LAYERS).map(layer => {
+    const chart = CHART_LAYERS[layer];
+    const area = savedMapAreas[areaKey(log.id, layer)];
+    const job = mapSaveJob && mapSaveJob.sortieId === log.id && mapSaveJob.layer === layer ? mapSaveJob : null;
+    let status;
+    let buttons;
+    if (job) {
+      const pct = job.total ? Math.round(job.done / job.total * 100) : 0;
+      status = `Saving… ${job.done.toLocaleString()} of ${job.total.toLocaleString()} tiles
+        <div class="map-progress"><span style="width:${pct}%"></span></div>`;
+      buttons = '<button type="button" class="btn small" data-act="offline-map-stop">Stop</button>';
+    } else if (area) {
+      const age = savedMapAge(area);
+      const stale = layer === 'sectional' && age >= SECTIONAL_CYCLE_DAYS;
+      status = `Saved ${esc(new Date(area.savedAt).toLocaleDateString())} · ${area.count.toLocaleString()} tiles · ${fmtBytes(area.bytes)}` +
+        (area.missing ? ` · <span class="warn-text">${area.missing} missing</span>` : '') +
+        `<div class="muted small">${esc(area.label)}</div>` +
+        (stale ? `<div class="warn-text small">Saved ${age} days ago. The FAA replaces the sectional every 56 days; save it again for the current chart.</div>` : '');
+      buttons = `<button type="button" class="btn small" data-act="offline-map-save" data-value="${layer}" ${mapSaveJob || !shape ? 'disabled' : ''}>Save again</button>
+        <button type="button" class="btn small danger" data-act="offline-map-delete" data-value="${layer}">Delete</button>`;
+    } else {
+      status = '<span class="muted">Not saved</span>';
+      buttons = `<button type="button" class="btn small${layer === 'sectional' ? ' primary' : ''}" data-act="offline-map-save" data-value="${layer}" ${mapSaveJob || !shape ? 'disabled' : ''}>Save</button>`;
+    }
+    return `<div class="map-row">
+        <div class="map-row-text"><strong>${esc(chart.label)}</strong><div class="small">${status}</div></div>
+        <div class="map-row-btns">${buttons}</div>
+      </div>`;
+  }).join('');
+  const what = shape
+    ? `Covers ${esc(shape.label)}.`
+    : 'Fill in the search area, the entry or exit point, or share the flight plan from ForeFlight to choose what to save.';
+  return `<div class="note-strip" style="margin-top:0;margin-bottom:10px">
+      Save the maps for this sortie before you leave, so the chart and the sketch pad show them with no signal. ${what}
+      Saved maps stay on this iPad and are not in backups. Not for navigation.
+    </div>${rows}`;
+}
+
+function offlineMapsCardHTML(log) {
+  return `<section class="card" id="offline-maps">
+      <div class="card-head"><div class="head-left"><h2>Offline maps</h2></div></div>
+      <div id="offline-maps-body">${offlineMapsInner(log)}</div>
+    </section>`;
+}
+
+// Repaint the card in place (it changes while a download runs).
+function renderOfflineMapsCard() {
+  const body = $('#offline-maps-body');
+  const log = activeSortie();
+  if (body && log) body.innerHTML = offlineMapsInner(log);
+  const note = $('#pos-note');
+  if (note) note.textContent = chartNoteText(chartLayerKey());
+}
+
 let positionMap = null;
 
 // The zoom that shows the FAA chart at 100%: one chart pixel per screen pixel.
@@ -961,7 +1420,7 @@ function positionSheet() {
   view.innerHTML = `<div class="pos-map" id="pos-map"></div>
     <div class="pos-panel">
       <div id="pos-text">${positionFixHTML(freshFix())}</div>
-      <div class="pos-note" id="pos-note">${esc(CHART_LAYERS[chartLayerKey()].source)} · for reference, not navigation · needs a connection the first time an area is viewed</div>
+      <div class="pos-note" id="pos-note">${esc(chartNoteText(chartLayerKey()))}</div>
     </div>
     <div class="seg pos-layers" role="group" aria-label="Map">
       ${Object.entries(CHART_LAYERS).map(([key, chart]) => `<button type="button" data-act="chart-layer" data-value="${key}" class="${key === chartLayerKey() ? 'active' : ''}">${chart.short}</button>`).join('')}
@@ -2848,6 +3307,8 @@ function planView(log) {
       </div>
     </section>
 
+    ${offlineMapsCardHTML(log)}
+
     <section class="card">
       <div class="card-head">
         <div class="head-left"><h2>Search plan</h2></div>
@@ -3458,20 +3919,20 @@ async function renderChartImage(view, W, H, layer) {
     for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + H - 1) / 256); ty++) tiles.push([tx, ty]);
   }
   let drawn = 0;
-  const load = (src, x, y, w, h) => new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';   // the map servers allow it, so the canvas can be saved
-    img.onload = () => { ctx.drawImage(img, x, y, w || img.width, h || img.height); drawn++; resolve(); };
-    img.onerror = () => resolve();
-    img.src = src;
-  });
-  if (chart.exportUrl) {
+  if (chart.exportUrl && navigator.onLine !== false) {
     // one picture of the whole page from the image server
     const res = 2 * EARTH_HALF / (256 * Math.pow(2, view.zoom));
-    await load(chartExportUrl(chart, [x0 * res - EARTH_HALF, EARTH_HALF - (y0 + H) * res, (x0 + W) * res - EARTH_HALF, EARTH_HALF - y0 * res], W, H), 0, 0, W, H);
-  } else {
-    await Promise.all(tiles.map(([tx, ty]) => load(chart.url.replace('{z}', view.zoom).replace('{y}', ty).replace('{x}', tx),
-      Math.round(tx * 256 - x0), Math.round(ty * 256 - y0))));
+    try {
+      const img = await loadImage(chartExportUrl(chart, [x0 * res - EARTH_HALF, EARTH_HALF - (y0 + H) * res, (x0 + W) * res - EARTH_HALF, EARTH_HALF - y0 * res], W, H), true);
+      ctx.drawImage(img, 0, 0, W, H);
+      drawn++;
+    } catch (_) { /* no signal: build it from tiles below */ }
+  }
+  if (!drawn) {
+    const n = Math.pow(2, view.zoom);
+    const results = await Promise.all(tiles.map(([tx, ty]) => drawChartTile(ctx, layer, view.zoom, ((tx % n) + n) % n, ty,
+      Math.round(tx * 256 - x0), Math.round(ty * 256 - y0), 256)));
+    drawn = results.filter(Boolean).length;
   }
   if (!drawn) throw new Error('no chart tiles');
   if (view.box) {
@@ -4606,7 +5067,10 @@ function helpSheet() {
             <span><strong>Observation photos</strong><span class="mi-sub">Tap Photo on an observation to use the camera or photo library. Up to six per observation; photos appear in the PDF.</span></span>
           </div>
           <div class="menu-item" style="cursor:default">
-            <span><strong>Sketch pad</strong><span class="mi-sub">Draw with a finger or Apple Pencil. Pick a background (grid, plain or the sectional around the search area), add pages, and tap the expand button for a full-screen pad.</span></span>
+            <span><strong>Sketch pad</strong><span class="mi-sub">Draw with a finger or Apple Pencil. Pick a background (grid, plain, or the sectional, topographic or terrain map around the search area), add pages, and tap the expand button for a full-screen pad.</span></span>
+          </div>
+          <div class="menu-item" style="cursor:default">
+            <span><strong>Offline maps</strong><span class="mi-sub">Before you leave, open Brief › Offline maps and tap Save. The sectional (and Topo or Terrain if you want them) around the search area, entry and exit points and ForeFlight route is kept on the iPad, so the chart and the sketch pad show it with no signal. Save the sectional again when it is more than 56 days old.</span></span>
           </div>
         </div>
         <p class="sheet-note" style="margin-top:10px">
@@ -4835,6 +5299,7 @@ function deleteMission() {
   closeSheet();
   save();
   render();
+  pruneSavedMaps();
   toast('Mission deleted');
 }
 
@@ -4852,6 +5317,7 @@ function deleteLog() {
   activeTab = defaultTab();
   save();
   render();
+  pruneSavedMaps();
   toast('Sortie deleted');
 }
 
@@ -6434,6 +6900,13 @@ const actions = {
     save();
     render();
   },
+  'offline-map-save': el => { const log = activeSortie(); if (log) saveOfflineMap(log, el.dataset.value); },
+  'offline-map-stop': () => { if (mapSaveJob) mapSaveJob.abort.abort(); },
+  'offline-map-delete': el => {
+    const log = activeSortie();
+    if (!log || !confirm('Delete the saved ' + CHART_LAYERS[el.dataset.value].label + ' map for this sortie from the iPad?')) return;
+    deleteOfflineMap(log, el.dataset.value);
+  },
   'chart-layer': el => {
     const key = el.dataset.value;
     if (!CHART_LAYERS[key]) return;
@@ -6446,7 +6919,7 @@ const actions = {
     }
     $$('.pos-layers [data-act="chart-layer"]').forEach(b => b.classList.toggle('active', b.dataset.value === key));
     const note = $('#pos-note');
-    if (note) note.textContent = CHART_LAYERS[key].source + ' · for reference, not navigation · needs a connection the first time an area is viewed';
+    if (note) note.textContent = chartNoteText(key);
   },
   'pen': el => {
     if (sketchCtl) sketchCtl.setColor(el.dataset.color);
@@ -6531,6 +7004,7 @@ document.addEventListener('input', event => {
   if (el.matches('[data-coord]')) updateCoordHelp(el);
   if (el.matches('textarea[maxlength]')) updateCharCount(el);
   if (/^(m\.number|sortie|aircraft|callsign|crew\.)/.test(path)) renderStrip();
+  if (/^(sar\.corners|entry|exit)\./.test(path) && !mapSaveJob) renderOfflineMapsCard();
 
   save();
 });
@@ -6847,6 +7321,7 @@ async function boot() {
   applyTheme();
   render();
   if (termsNeeded()) termsSheet(true);
+  loadSavedMapAreas();
 
   setSaveStatus('saved', loaded ? 'Saved ' + fmtClock(state.savedAt ? new Date(state.savedAt) : new Date()) : 'On this device');
   if (!loaded) save();
