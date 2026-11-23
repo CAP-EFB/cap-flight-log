@@ -40,7 +40,14 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Notes** — free text, the whole page, shrinking above the keyboard.
 - **Sketch** — a sketch pad filling everything between the header and the tab bar: each page takes the
   shape of the screen it was started on, and the tools (backgrounds, Undo/Redo, Clear, pages) sit in a
-  row of the header. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
+  row of the header.
+  - **Map pages** (Sectional, Topo, Terrain) are the live chart: pan and pinch-zoom it like Fly, and draw on
+    it. Lines are kept in latitude and longitude, so they stay where they were drawn and scale with the
+    chart. The Apple Pencil always draws; a finger moves the map with the hand tool, and draws with a pen
+    (magenta, black, blue) or the eraser picked. The page's PDF picture is the view on screen. Saved offline
+    maps work here too.
+  - **Paper pages** (Grid, Plain) are drawn with PencilKit in the iPad app. A drawn page keeps its kind;
+    choosing the other kind starts a new page. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
   lasso, ruler, colours), pressure and tilt, palm rejection (a finger draws unless Only Draw with Apple
   Pencil is on in iPad Settings), pinch to zoom up to 5×, and Undo/Redo. The page's background zooms under
   the strokes; each page keeps its PencilKit drawing (to edit again) and a PNG of its ink. Ink from before

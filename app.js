@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.32.1';
+const APP_VERSION = '1.33.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2316,7 +2316,7 @@ const SKETCH_BACKGROUNDS = [['grid', 'Grid'], ['plain', 'Plain'], ['sectional', 
 // A page is 1000 points wide; its height follows the shape of the screen it
 // was started on (1250 for pages from before 1.32.0).
 function blankSketchPage(bg) {
-  return { id: uid(), w: 1000, h: 1250, bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '' };
+  return { id: uid(), w: 1000, h: 1250, bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '', strokes: [] };
 }
 
 function sketchSize(page) {
@@ -2340,6 +2340,7 @@ function normalizeSketchPages(raw) {
     // the iPad app's PencilKit drawing (base64), and the ink drawn before it
     pk: typeof p.pk === 'string' && /^[A-Za-z0-9+/=]*$/.test(p.pk) ? p.pk : '',
     inkBase: safeImage(p.inkBase),
+    strokes: normalizeStrokes(p.strokes),   // lines on a map page, in latitude and longitude
     w: 1000,
     h: Math.min(2400, Math.max(300, Math.round(Number(p.h) || 1250)))
   })) : [];
@@ -4215,7 +4216,8 @@ const SKETCH_TOOL_ICONS = {
   clear: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
   prev: '<path d="m15 6-6 6 6 6"/>',
-  next: '<path d="m9 6 6 6-6 6"/>'
+  next: '<path d="m9 6 6 6-6 6"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>'
 };
 const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_TOOL_ICONS[name]}</svg>`;
 
@@ -4223,21 +4225,31 @@ const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="current
    page takes the shape of the screen, and its tools sit in a row of the
    header, because in the app the PencilKit canvas lies over the page and
    would hide anything placed on it. */
+const MAP_PENS = [['#d81b60', 'Magenta pen'], ['#17222e', 'Black pen'], ['#0a47c2', 'Blue pen']];
+
 function sketchToolsHTML(log) {
   const { page, index, count } = currentSketchPage(log);
   const bg = page.bg === 'image' ? '' : page.bg;
+  const mapPage = isMapSketchPage(page);
+  const penTools = mapPage
+    ? `<div class="sk-glass sk-pens" role="group" aria-label="Tool">
+        <button type="button" class="sk-btn sk-hand${mapSketchTool === 'pan' ? ' on' : ''}" data-act="sketch-pan" aria-label="Move the map" title="Move the map (the Pencil still draws)">${sketchIcon('hand')}</button>
+        ${MAP_PENS.map(([c, label]) => `<button type="button" class="swatch${mapSketchTool === 'pen' && mapSketchColor === c ? ' active' : ''}" style="background:${c}" data-act="pen" data-color="${c}" aria-label="${label}" title="${label}"></button>`).join('')}
+        <button type="button" class="swatch eraser${mapSketchTool === 'eraser' ? ' active' : ''}" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
+      </div>`
+    : NATIVE ? '' : `<div class="sk-glass sk-pens" role="group" aria-label="Pen">
+        <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
+        <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
+        <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
+      </div>`;
   return `<div class="sk-row">
       <div class="seg sk-glass sk-bgs" role="group" aria-label="Background">
         ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
       </div>
-      ${NATIVE ? '' : `<div class="sk-glass sk-pens" role="group" aria-label="Pen">
-        <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
-        <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
-        <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
-      </div>`}
+      ${penTools}
       <div class="sk-glass">
         <button type="button" class="sk-btn" data-act="undo-sketch" aria-label="Undo" title="Undo">${sketchIcon('undo')}</button>
-        ${NATIVE ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
+        ${NATIVE && !mapPage ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
         <button type="button" class="sk-btn" data-act="clear-sketch" aria-label="Clear the drawing" title="Clear the drawing">${sketchIcon('clear')}</button>
       </div>
       <span class="sk-spacer"></span>
@@ -4267,6 +4279,15 @@ function renderTopbarTools() {
 function sketchView(log) {
   const { page, index } = currentSketchPage(log);
   const { w, h } = sketchSize(page);
+  if (isMapSketchPage(page)) {
+    return `<div class="sketch-shell" id="sketch-card">
+        <div class="sketch-map${mapSketchTool === 'pan' ? '' : ' drawing'}" id="sketch-map" aria-label="Map page ${index + 1}"></div>
+        <div class="sk-mapzoom">
+          <button type="button" class="fly-round" data-act="sketch-zoom" data-step="1" aria-label="Zoom in">${flyIcon('plus')}</button>
+          <button type="button" class="fly-round" data-act="sketch-zoom" data-step="-1" aria-label="Zoom out">${flyIcon('minus')}</button>
+        </div>
+      </div>`;
+  }
   return `<div class="sketch-shell" id="sketch-card">
       <div class="sketch-stage">
         <div class="canvas-wrap" style="--ar:${w / h}">
@@ -4457,6 +4478,265 @@ async function renderChartImage(view, W, H, layer) {
   return canvas.toDataURL('image/jpeg', 0.85);
 }
 
+/* ---------- map pages: drawing on a live map ----------
+   A Sectional, Topo or Terrain page is the live chart, panned and zoomed like
+   Fly's, with the drawing kept as lines on the map itself (latitude and
+   longitude), so it moves and scales with the chart and stays where it was
+   drawn. The Apple Pencil always draws; a finger moves the map with the hand
+   tool, and draws with a pen picked. Two fingers pinch to zoom. The page's
+   picture (for the PDF) is the view on screen, redrawn after each change.
+   Grid and plain pages stay paper. Ink drawn on a map page before 1.33.0
+   keeps that page as a picture. */
+let mapSketch = null;            // the open map page: { map, page, layer, strokes }
+let mapSketchTool = 'pan';       // pan, pen, eraser (what a finger does)
+let mapSketchColor = '#d81b60';
+
+// A map page that is drawn on live: a chart background, and no older picture-ink.
+function isMapSketchPage(page) {
+  return !!CHART_LAYERS[page.bg] && !page.ink && !page.pk && !page.inkBase;
+}
+
+function normalizeStrokes(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(s => s && Array.isArray(s.p) && s.p.length).map(s => ({
+    c: /^#[0-9a-f]{6}$/i.test(s.c) ? s.c : '#d81b60',
+    w: Math.min(30, Math.max(1, Number(s.w) || 4)),
+    z: Math.min(18, Math.max(3, Number(s.z) || 12)),
+    p: s.p.filter(q => Array.isArray(q) && Number.isFinite(q[0]) && Number.isFinite(q[1]))
+      .map(q => [Math.round(q[0] * 1e6) / 1e6, Math.round(q[1] * 1e6) / 1e6])
+  })).filter(s => s.p.length);
+}
+
+// A line's width at a map zoom: drawn at zoom z, it grows and shrinks with the chart.
+function strokeWeight(stroke, zoom) {
+  return Math.min(60, Math.max(1, stroke.w * Math.pow(2, zoom - stroke.z)));
+}
+
+function closeMapSketch() {
+  if (!mapSketch) return;
+  clearTimeout(mapSketch.snapTimer);
+  mapSketch.map.remove();
+  mapSketch = null;
+}
+
+function setupMapSketch(page) {
+  const el = $('#sketch-map');
+  if (!el || !window.L) return;
+  closeMapSketch();
+  if (NATIVE) hideNativeSketch();
+  const log = activeLog();
+  const { w, h } = sketchSize(page);
+  const start = page.map || (() => {
+    const view = sketchMapView(log, w, h, page.bg);
+    return view ? { lat: view.lat, lon: view.lon, zoom: view.zoom } : { lat: 39.5, lon: -98.35, zoom: 5 };
+  })();
+  const map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 15, zoomSnap: 1, tap: false })
+    .setView([start.lat, start.lon], start.zoom);
+  const tiles = chartTileLayer(page.bg).addTo(map);
+  // the search area and the ForeFlight plan, for bearings
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)]);
+  if (corners.every(([a, b]) => a != null && b != null)) {
+    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.06, dashArray: '6 4', interactive: false }).addTo(map);
+  }
+  if (log.fpl && log.fpl.points.length > 1) {
+    L.polyline(log.fpl.points.map(p => [p[0], p[1]]), { color: '#0a47c2', weight: 3, dashArray: '10 6', opacity: 0.8, interactive: false }).addTo(map);
+  }
+  const renderer = L.canvas({ padding: 0.5 });
+  const group = L.layerGroup().addTo(map);
+  const ms = mapSketch = { map, page, tiles, group, renderer, lines: [], undo: [], snapTimer: null };
+  // an empty map page takes the screen's shape, so its picture matches the view
+  const room = el.getBoundingClientRect();
+  if (!page.strokes.length && room.width > 100 && room.height > 100) {
+    page.w = 1000;
+    page.h = Math.min(2400, Math.max(300, Math.round(1000 * room.height / room.width)));
+  }
+
+  function draw() {
+    group.clearLayers();
+    const zoom = map.getZoom();
+    ms.lines = page.strokes.map(stroke => L.polyline(stroke.p, {
+      color: stroke.c, weight: strokeWeight(stroke, zoom), lineCap: 'round', lineJoin: 'round', renderer, interactive: false
+    }).addTo(group));
+  }
+  draw();
+  map.on('zoomend', () => {
+    const zoom = map.getZoom();
+    ms.lines.forEach((line, i) => line.setStyle({ weight: strokeWeight(page.strokes[i], zoom) }));
+  });
+  map.on('moveend', () => {
+    const c = map.getCenter();
+    page.map = { lat: c.lat, lon: c.lng, zoom: map.getZoom() };
+    saveQuiet();
+    scheduleSnapshot();
+  });
+
+  function useTool(tool) {
+    mapSketchTool = tool;
+    el.classList.toggle('drawing', tool !== 'pan');
+    renderTopbarTools();
+  }
+
+  function remember() {
+    ms.undo.push(JSON.stringify(page.strokes));
+    if (ms.undo.length > 30) ms.undo.shift();
+  }
+  function changed() {
+    save();
+    scheduleSnapshot();
+  }
+  function scheduleSnapshot() {
+    clearTimeout(ms.snapTimer);
+    ms.snapTimer = setTimeout(() => snapshotMapSketch(ms).catch(() => {}), 1500);
+  }
+
+  // Drawing: a pen always; a finger or mouse unless the hand tool is on.
+  let penSeen = false;
+  let stroke = null;     // { pointerId, data, line } while a line is drawn
+  let erasing = null;    // pointerId while erasing
+  const latlng = event => {
+    const r = el.getBoundingClientRect();
+    return map.containerPointToLatLng([event.clientX - r.left, event.clientY - r.top]);
+  };
+  const eraseAt = event => {
+    const r = el.getBoundingClientRect();
+    const at = L.point(event.clientX - r.left, event.clientY - r.top);
+    const before = page.strokes.length;
+    page.strokes = page.strokes.filter(s => !s.p.some(q => map.latLngToContainerPoint(q).distanceTo(at) < 18));
+    if (page.strokes.length !== before) draw();
+  };
+  el.addEventListener('pointerdown', event => {
+    if (event.target.closest('.leaflet-control')) return;
+    const pen = event.pointerType === 'pen';
+    if (pen) penSeen = true;
+    const fingerDraws = mapSketchTool !== 'pan' && !(event.pointerType === 'touch' && penSeen);
+    if (!pen && !fingerDraws) return;            // the map pans and zooms
+    if (stroke || erasing != null) return;      // one line at a time
+    event.preventDefault();
+    event.stopPropagation();
+    map.dragging.disable();
+    try { el.setPointerCapture(event.pointerId); } catch (_) { /* ignore */ }
+    remember();
+    const tool = pen && mapSketchTool === 'pan' ? 'pen' : mapSketchTool;
+    if (tool === 'eraser') {
+      erasing = event.pointerId;
+      eraseAt(event);
+      return;
+    }
+    const at = latlng(event);
+    const data = { c: mapSketchColor, w: pen && event.pressure > 0 ? 2 + event.pressure * 5 : 4, z: map.getZoom(), p: [[at.lat, at.lng]] };
+    const line = L.polyline([at], { color: data.c, weight: data.w, lineCap: 'round', lineJoin: 'round', renderer, interactive: false }).addTo(group);
+    stroke = { pointerId: event.pointerId, data, line };
+  }, true);
+  el.addEventListener('pointermove', event => {
+    if (erasing === event.pointerId) { event.stopPropagation(); eraseAt(event); return; }
+    if (!stroke || event.pointerId !== stroke.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const samples = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
+    (samples.length ? samples : [event]).forEach(sample => {
+      const at = latlng(sample);
+      stroke.data.p.push([at.lat, at.lng]);
+      stroke.line.addLatLng(at);
+    });
+  }, true);
+  const end = event => {
+    if (erasing === event.pointerId) {
+      erasing = null;
+      map.dragging.enable();
+      changed();
+      return;
+    }
+    if (!stroke || event.pointerId !== stroke.pointerId) return;
+    event.stopPropagation();
+    const done = stroke.data;
+    stroke = null;
+    map.dragging.enable();
+    page.strokes.push(normalizeStrokes([done])[0]);
+    draw();
+    changed();
+  };
+  el.addEventListener('pointerup', end, true);
+  el.addEventListener('pointercancel', end, true);
+
+  sketchCtl = {
+    map: true,
+    mode() { return { color: mapSketchColor, eraser: mapSketchTool === 'eraser' }; },
+    setColor(c) { mapSketchColor = c; useTool('pen'); },
+    setEraser() { useTool('eraser'); },
+    setPan() { useTool('pan'); },
+    undo() {
+      if (!ms.undo.length) return;
+      page.strokes = JSON.parse(ms.undo.pop());
+      draw();
+      changed();
+    },
+    redo() {},
+    clear() {
+      remember();
+      page.strokes = [];
+      draw();
+      changed();
+    },
+    flush() {
+      if (ms.snapTimer) { clearTimeout(ms.snapTimer); snapshotMapSketch(ms).catch(() => {}); }
+    },
+    zoom(step) { if (step > 0) map.zoomIn(); else map.zoomOut(); }
+  };
+  setTimeout(() => map.invalidateSize(), 60);
+  if (!page.image) scheduleSnapshot();
+}
+
+// The page's picture for the PDF: exactly the view on screen (the chart at the
+// map's zoom, the search area and the lines), scaled to the page.
+async function snapshotMapSketch(ms) {
+  const { map, page } = ms;
+  ms.snapTimer = null;
+  const { w: W, h: H } = sketchSize(page);
+  const size = map.getSize();
+  const sw = Math.round(size.x);
+  const sh = Math.round(size.y);
+  const c = map.getCenter();
+  const zoom = map.getZoom();
+  const log = activeLog();
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)])
+    .filter(([a, b]) => a != null && b != null);
+  const box = corners.length >= 2 ? {
+    north: Math.max(...corners.map(q => q[0])), south: Math.min(...corners.map(q => q[0])),
+    east: Math.max(...corners.map(q => q[1])), west: Math.min(...corners.map(q => q[1]))
+  } : null;
+  const view = { lat: c.lat, lon: c.lng, zoom, box };
+  const img = await loadImg(await renderChartImage(view, sw, sh, page.bg));
+  if (!img) return;
+  const screen = document.createElement('canvas');
+  screen.width = sw;
+  screen.height = sh;
+  const ctx = screen.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  page.strokes.forEach(stroke => {
+    const pts = stroke.p.map(q => map.latLngToContainerPoint(q));
+    ctx.strokeStyle = stroke.c;
+    ctx.lineWidth = strokeWeight(stroke, zoom);
+    ctx.beginPath();
+    pts.forEach((pt, i) => { if (i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y); });
+    if (pts.length === 1) ctx.lineTo(pts[0].x + 0.1, pts[0].y);
+    ctx.stroke();
+  });
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const octx = out.getContext('2d');
+  octx.fillStyle = '#e8edf1';
+  octx.fillRect(0, 0, W, H);
+  // the screen's view, filling the page (the page has the screen's shape)
+  const scale = Math.max(W / sw, H / sh);
+  octx.drawImage(screen, (W - sw * scale) / 2, (H - sh * scale) / 2, sw * scale, sh * scale);
+  page.image = out.toDataURL('image/jpeg', 0.85);
+  page.map = { lat: c.lat, lon: c.lng, zoom };
+  save();
+}
+
 /* ---------- the sketch pad in the iPad app: PencilKit ----------
    The app puts Apple's PencilKit canvas over the page: the tool palette (pens,
    marker, pencil, eraser, lasso, ruler, colours), pressure and tilt, palm
@@ -4592,6 +4872,12 @@ function setupNativeSketch(page, W, H) {
    and its ink on top. A finger or Apple Pencil draws; the eraser removes ink
    only; Undo steps back through the last strokes on this page. */
 function setupSketch() {
+  if ($('#sketch-map')) {
+    setupMapSketch(currentSketchPage(activeLog()).page);
+    return;
+  }
+  closeMapSketch();
+  if (mapSketchTool !== 'pan' && !$('#sketch')) mapSketchTool = 'pan';   // back to moving next time
   const canvas = $('#sketch');
   const bgCanvas = $('#sketch-bg');
   if (!canvas || !bgCanvas) { sketchCtl = null; if (NATIVE) hideNativeSketch(); return; }
@@ -4792,34 +5078,34 @@ function setupSketch() {
   updateToolbarState();
 }
 
-async function setSketchBackground(bg) {
+/* A page is paper (grid, plain) or a map (sectional, topographic, terrain).
+   An empty page changes kind; one already drawn on keeps it, and the other
+   kind starts a new page. Between maps, a map page just changes chart. */
+function setSketchBackground(bg) {
   const log = activeSortie();
   if (!log) return;
   if (sketchCtl) sketchCtl.flush();
   const { page } = currentSketchPage(log);
-  if (page.bg === 'image' && !confirm('This page was drawn before backgrounds could change, so its drawing is part of its background. Replace it with a blank page?')) return;
-  if (page.bg === 'image') page.ink = '';
-  const chart = CHART_LAYERS[bg];
-  if (chart) {
-    const { w: PW, h: PH } = sketchSize(page);
-    const view = sketchMapView(log, PW, PH, bg);
-    if (!view) { toast('No position yet · fill the search area on Brief or get a GPS fix'); return; }
-    toast('Loading the ' + chart.label.toLowerCase() + ' map…');
-    try {
-      page.bgImage = await renderChartImage(view, PW, PH, bg);
-    } catch (err) {
-      console.warn('chart background failed', err);
-      toast('Could not load the map · it needs a connection the first time');
-      return;
-    }
-    page.map = { lat: view.lat, lon: view.lon, zoom: view.zoom };
-    toast(chart.label + (view.box ? ' around the search area' : ' around your position'));
+  const toMap = !!CHART_LAYERS[bg];
+  const isMap = isMapSketchPage(page);
+  if (page.bg === bg) return;
+  const drawn = isMap ? page.strokes.length > 0 : !sketchPageBlank(page) || page.bg === 'image';
+  if (toMap && isMap) {
+    page.bg = bg;
+    page.image = '';
+  } else if (drawn) {
+    const fresh = blankSketchPage(bg);
+    if (toMap && isMap === false && page.map) fresh.map = page.map;
+    log.sketches.push(fresh);
+    sketchPageIndex[log.id] = log.sketches.length - 1;
+    toast('Started page ' + log.sketches.length + ' with the ' + (toMap ? CHART_LAYERS[bg].label.toLowerCase() + ' map' : bg === 'plain' ? 'plain paper' : 'grid') + ' · this page kept its drawing');
   } else {
+    page.bg = bg;
     page.bgImage = '';
-    page.map = null;
+    page.image = '';
+    page.strokes = [];
+    if (!toMap) page.map = null;
   }
-  page.bg = bg;
-  page.reflatten = true;
   save();
   if (activeTab === 'sketch') render();
 }
@@ -7969,6 +8255,8 @@ const actions = {
     toast('Signature cleared');
   },
   'sketch-bg': el => setSketchBackground(el.dataset.value),
+  'sketch-pan': () => { if (sketchCtl && sketchCtl.setPan) sketchCtl.setPan(); },
+  'sketch-zoom': el => { if (sketchCtl && sketchCtl.zoom) sketchCtl.zoom(Number(el.dataset.step)); },
   'sketch-page': el => {
     const log = activeSortie();
     if (!log) return;
@@ -7981,8 +8269,10 @@ const actions = {
     if (!log) return;
     if (sketchCtl) sketchCtl.flush();
     const { page } = currentSketchPage(log);
-    // a new page keeps the paper (grid or plain); a map is chosen per page
-    log.sketches.push(blankSketchPage(page.bg === 'plain' ? 'plain' : 'grid'));
+    // a new page keeps the kind of this one: the same paper, or the same map where it is now
+    const fresh = blankSketchPage(isMapSketchPage(page) ? page.bg : page.bg === 'plain' ? 'plain' : 'grid');
+    if (isMapSketchPage(page) && page.map) fresh.map = Object.assign({}, page.map);
+    log.sketches.push(fresh);
     sketchPageIndex[log.id] = log.sketches.length - 1;
     save();
     render();
