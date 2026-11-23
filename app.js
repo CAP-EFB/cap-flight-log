@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.31.0';
+const APP_VERSION = '1.31.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -4206,36 +4206,41 @@ function notesView(log) {
   </div>`;
 }
 
-// The sketch pad: the page as large as fits between the header and the tab bar.
+const SKETCH_TOOL_ICONS = {
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',
+  clear: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3"/>',
+  add: '<path d="M12 5v14M5 12h14"/>',
+  prev: '<path d="m15 6-6 6 6 6"/>',
+  next: '<path d="m9 6 6 6-6 6"/>'
+};
+const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_TOOL_ICONS[name] || SKETCH_ICONS[name]}</svg>`;
+
+/* The sketch pad, full page like Fly: the 4:5 page as large as fits on a dark
+   surface between the header and the tab bar, its controls on glass in a
+   strip above and below it (in the app the PencilKit canvas sits over the
+   page, so nothing floats on it). Full screen hides the header and tab bar. */
 function sketchView(log) {
   const { page, index, count } = currentSketchPage(log);
   const bg = page.bg === 'image' ? '' : page.bg;
-  return `<div class="page-fill">
-    <section class="card sketch-card${sketchFullscreen ? ' fullscreen' : ''}" id="sketch-card">
-      <div class="card-head">
-        <div class="head-left"><h2>Sketch pad</h2></div>
-        <div class="sketch-tools">
-          ${NATIVE ? '' : `<button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
-          <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
-          <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>`}
-          <button type="button" class="mini" data-act="undo-sketch">Undo</button>
-          ${NATIVE ? '<button type="button" class="mini" data-act="redo-sketch">Redo</button>' : ''}
-          <button type="button" class="mini" data-act="clear-sketch">Clear</button>
-          <button type="button" class="mini icon-mini" data-act="sketch-fullscreen" aria-label="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}" title="${sketchFullscreen ? 'Exit full screen' : 'Full screen'}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_ICONS[sketchFullscreen ? 'shrink' : 'expand']}</svg>
-          </button>
-        </div>
-      </div>
-      <div class="sketch-bar">
-        <div class="seg" role="group" aria-label="Background">
+  const full = sketchFullscreen;
+  return `<div class="sketch-shell${full ? ' fullscreen' : ''}" id="sketch-card">
+      <div class="sk-bar sk-top">
+        <div class="seg sk-glass sk-bgs" role="group" aria-label="Background">
           ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
         </div>
-        <div class="sketch-pages">
-          <button type="button" class="mini" data-act="sketch-page" data-step="-1" ${index === 0 ? 'disabled' : ''} aria-label="Previous page">‹</button>
-          <span class="sketch-page-label">Page ${index + 1} of ${count}</span>
-          <button type="button" class="mini" data-act="sketch-page" data-step="1" ${index === count - 1 ? 'disabled' : ''} aria-label="Next page">›</button>
-          <button type="button" class="mini" data-act="sketch-add-page">+ Page</button>
-          <button type="button" class="mini" data-act="sketch-del-page">Delete page</button>
+        <div class="sk-group">
+          ${NATIVE ? '' : `<div class="sk-glass sk-pens" role="group" aria-label="Pen">
+            <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
+            <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
+            <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
+          </div>`}
+          <div class="sk-glass sk-actions">
+            <button type="button" class="sk-btn" data-act="undo-sketch" aria-label="Undo" title="Undo">${sketchIcon('undo')}</button>
+            ${NATIVE ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
+            <button type="button" class="sk-btn" data-act="clear-sketch" aria-label="Clear the drawing" title="Clear the drawing">${sketchIcon('clear')}</button>
+            <button type="button" class="sk-btn" data-act="sketch-fullscreen" aria-label="${full ? 'Exit full screen' : 'Full screen'}" title="${full ? 'Exit full screen' : 'Full screen'}">${sketchIcon(full ? 'shrink' : 'expand')}</button>
+          </div>
         </div>
       </div>
       <div class="sketch-stage">
@@ -4244,13 +4249,21 @@ function sketchView(log) {
           <canvas id="sketch" width="1000" height="1250" aria-label="Sketch pad, page ${index + 1}"></canvas>
         </div>
       </div>
-      <div class="sketch-hint">${NATIVE
-        ? 'Pick pens, marker, pencil, eraser, lasso and ruler in the floating palette; pinch to zoom in. A finger draws unless Only Draw with Apple Pencil is on in iPad Settings.'
-        : 'Draw with a finger or Apple Pencil; Pencil pressure sets the line, and once it draws, a resting palm is ignored.'} ${CHART_LAYERS[page.bg]
-        ? 'The map is centred on the search area (or where you were) and kept with this page, so it shows offline. Not for navigation.'
-        : 'Sectional, Topo and Terrain put that map around the search area under the drawing; they need a connection the first time.'} Sketches save automatically.</div>
-    </section>
-  </div>`;
+      <div class="sk-bar sk-bottom">
+        <div class="sk-glass sk-pages">
+          <button type="button" class="sk-btn" data-act="sketch-page" data-step="-1" ${index === 0 ? 'disabled' : ''} aria-label="Previous page">${sketchIcon('prev')}</button>
+          <span class="sk-page-label">Page ${index + 1} of ${count}</span>
+          <button type="button" class="sk-btn" data-act="sketch-page" data-step="1" ${index === count - 1 ? 'disabled' : ''} aria-label="Next page">${sketchIcon('next')}</button>
+        </div>
+        <div class="sk-glass sk-pagebtns">
+          <button type="button" class="sk-btn wide" data-act="sketch-add-page">${sketchIcon('add')}Page</button>
+          <button type="button" class="sk-btn wide" data-act="sketch-del-page">Delete</button>
+        </div>
+        <div class="sk-note">${CHART_LAYERS[page.bg]
+          ? esc(CHART_LAYERS[page.bg].source) + ' · kept with this page for offline use · not for navigation'
+          : NATIVE ? 'Tools in the floating palette · pinch to zoom' : 'Pencil pressure sets the line · saved as you draw'}</div>
+      </div>
+    </div>`;
 }
 
 /* ---------- targeted output updates ---------- */

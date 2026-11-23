@@ -855,8 +855,6 @@ html.page-full, html.page-full body { overflow: hidden; overscroll-behavior: non
 .page-fill > .card { flex: 1; min-height: 0; margin: 0 auto; width: 100%; max-width: 1100px; display: flex; flex-direction: column; }
 /* the keyboard takes the tab bar's place */
 body.keyboard-open .page-fill { bottom: 0; }
-/* the sketch pad in full screen lifts its page above the header and the tab bar */
-html.sketch-full .page-fill { z-index: 170; }
 textarea.notes-full {
   flex: 1; min-height: 0; width: 100%;
   resize: none;
@@ -864,7 +862,6 @@ textarea.notes-full {
   padding: 14px 16px;
 }
 
-.sketch-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .swatch {
   width: 34px; height: 34px;
@@ -896,13 +893,6 @@ textarea.notes-full {
 }
 /* The page, 4:5, sized to fit the screen below the header and above the
    tab bar: the background canvas under, the ink canvas on top. */
-.sketch-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 10px; }
-.sketch-bar .seg button { min-height: 34px; padding: 6px 11px; font-size: 12.5px; }
-.sketch-pages { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sketch-page-label { font-size: 12.5px; font-weight: 650; color: var(--muted); min-width: 74px; text-align: center; }
-.sketch-pages .mini[disabled] { opacity: .35; pointer-events: none; }
-.icon-mini { display: inline-flex; align-items: center; justify-content: center; padding: 0 9px; }
-.icon-mini svg { width: 17px; height: 17px; }
 /* the stage takes the room left in the card; the 4:5 page is as large as fits in it */
 .sketch-stage {
   flex: 1; min-height: 0;
@@ -928,16 +918,81 @@ textarea.notes-full {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-/* full screen: the pad over everything, as large as the screen allows */
-html.sketch-full, html.sketch-full body { overflow: hidden; }
-.sketch-card.fullscreen {
-  position: fixed; inset: 0; z-index: 160;
-  margin: 0; border-radius: 0; border: 0;
-  display: flex; flex-direction: column;
-  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+/* ---------- the sketch pad, full page like Fly ---------- */
+.sketch-shell {
+  position: fixed; left: 0; right: 0;
+  top: var(--page-top, 110px);
+  bottom: calc(58px + env(safe-area-inset-bottom));
+  z-index: 10;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
+  /* a dark desk under the page */
+  background: radial-gradient(ellipse at 50% 40%, #273444 0%, #151d27 75%);
+  color: #f2f6fa;
   overflow: hidden;
 }
-.sketch-card.fullscreen .sketch-hint { display: none; }
+.sketch-shell .sketch-stage { min-height: 0; }
+.sketch-shell .canvas-wrap {
+  border: 0;
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .06);
+}
+/* the control strips */
+.sk-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-height: 48px; }
+.sk-group { display: flex; align-items: center; gap: 8px; }
+.sk-glass {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, .1);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+}
+.sk-bgs { border-radius: 999px; }
+.sk-bgs button { min-height: 38px; padding: 0 13px; border-radius: 999px; border: 0; background: transparent; color: rgba(242, 246, 250, .8); font-weight: 650; font-size: 13px; cursor: pointer; }
+.sk-bgs button.active { background: #fff; color: #14212f; }
+.sk-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 40px; height: 40px; padding: 0 10px;
+  border: 0; border-radius: 999px;
+  background: transparent; color: #f2f6fa;
+  font-size: 14px; font-weight: 650; cursor: pointer;
+}
+.sk-btn svg { width: 20px; height: 20px; }
+.sk-btn:active { background: rgba(255, 255, 255, .14); }
+.sk-btn[disabled] { opacity: .3; pointer-events: none; }
+.sk-btn.wide { padding: 0 14px; }
+.sk-pens { gap: 6px; padding: 5px 7px; }
+.sk-pens .swatch { width: 32px; height: 32px; border-radius: 50%; border-color: rgba(255, 255, 255, .3); }
+.sk-pens .swatch.eraser { background: rgba(255, 255, 255, .12); color: #fff; }
+.sk-page-label { min-width: 92px; text-align: center; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sk-note { flex: 1 1 100%; text-align: center; font-size: 11px; color: rgba(242, 246, 250, .55); order: 3; }
+@media (min-width: 900px) { .sk-note { flex: 1 1 0; order: 0; } }
+/* wider than tall (landscape): the controls move into the side margins, so the page gets the full height */
+@media (min-aspect-ratio: 1/1) {
+  .sketch-shell { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 14px; }
+  .sketch-shell .sketch-stage { grid-column: 2; grid-row: 1; width: min(calc(100vw - 420px), calc((100dvh - var(--page-top, 110px) - 80px) * .8)); }
+  .sketch-shell.fullscreen .sketch-stage { width: min(calc(100vw - 420px), calc((100dvh - 30px) * .8)); }
+  .sk-bar { flex-direction: column; align-items: stretch; justify-content: center; flex-wrap: nowrap; min-height: 0; }
+  .sk-top { grid-column: 1; grid-row: 1; align-items: flex-end; }
+  .sk-bottom { grid-column: 3; grid-row: 1; align-items: flex-start; }
+  .sk-group { flex-direction: column; align-items: flex-end; }
+  .sk-bgs { flex-direction: column; border-radius: 22px; }
+  .sk-bgs button { width: 100%; }
+  .sk-note { flex: 0 0 auto; order: 3; text-align: left; max-width: 180px; }
+}
+
+/* full screen: over the header and the tab bar */
+html.sketch-full, html.sketch-full body { overflow: hidden; }
+.sketch-shell.fullscreen {
+  top: 0; bottom: 0; z-index: 170;
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+}
+
 
 .sketch-hint {
   margin-top: 8px;
