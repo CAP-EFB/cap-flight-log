@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.27.0';
+const APP_VERSION = '1.27.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1692,7 +1692,9 @@ function placeFlyShell() {
   const shell = $('#fly-shell');
   const bar = $('.topbar');
   if (!shell || !bar) return;
-  shell.style.top = Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px';
+  const top = Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px';
+  if (shell.style.top === top) return;
+  shell.style.top = top;
   if (positionMap) positionMap.map.invalidateSize();
 }
 
@@ -7683,8 +7685,14 @@ document.addEventListener('focusout', () => {
   }, 0);
 });
 
-// rotating the iPad or the header changing height moves Fly's map edge
+// Fly's map starts where the header ends. The header changes height on its
+// own: the GPS position arriving can push the mission and sortie onto a
+// second row. Rotating the iPad does too.
 window.addEventListener('resize', () => { if (activeTab === 'fly') placeFlyShell(); });
+if (window.ResizeObserver) {
+  const topbar = document.querySelector('.topbar');
+  if (topbar) new ResizeObserver(() => { if (activeTab === 'fly') placeFlyShell(); }).observe(topbar, { box: 'border-box' });
+}
 
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
