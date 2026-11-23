@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.0';
+const APP_VERSION = '1.23.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -566,11 +566,39 @@ async function scheduleOpsReminder() {
 /* ---------- files opened from other apps ----------
    ForeFlight's Send To and AirDrop can hand Mission Log a flight plan (.fpl),
    a shared sortie or a backup (.json). */
+/* Text from a file's bytes. ForeFlight writes its FPL files as UTF-16 with a
+   byte-order mark, so the encoding comes from the BOM; without one, UTF-8, or
+   Windows-1252 if that fails. */
+function decodeTextBytes(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (b[0] === 0xFF && b[1] === 0xFE) return new TextDecoder('utf-16le').decode(b.subarray(2));
+  if (b[0] === 0xFE && b[1] === 0xFF) return new TextDecoder('utf-16be').decode(b.subarray(2));
+  if (b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) return new TextDecoder('utf-8').decode(b.subarray(3));
+  // UTF-16 without a BOM: every other byte of ASCII text is zero
+  if (b.length > 3 && b[0] !== 0 && b[1] === 0 && b[3] === 0) return new TextDecoder('utf-16le').decode(b);
+  if (b.length > 3 && b[0] === 0 && b[2] === 0 && b[1] !== 0) return new TextDecoder('utf-16be').decode(b);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(b);
+  } catch (_) {
+    return new TextDecoder('windows-1252').decode(b);
+  }
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(String(base64).replace(/^data:[^,]*,/, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 async function openSharedFile(url) {
   try {
     const name = decodeURIComponent(String(url).split('/').pop() || 'file');
-    const read = await Native.Filesystem.readFile({ path: url, encoding: 'utf8' });
-    const text = typeof read.data === 'string' ? read.data : await read.data.text();
+    // read the bytes (no encoding: base64), then decode whatever the file uses
+    const read = await Native.Filesystem.readFile({ path: url });
+    const text = typeof read.data === 'string'
+      ? decodeTextBytes(base64ToBytes(read.data))
+      : decodeTextBytes(new Uint8Array(await read.data.arrayBuffer()));
     if (/\.fpl$/i.test(name) || /<flight-plan/i.test(text.slice(0, 600))) {
       if (!sortieReady()) {
         toast('Add the mission and a sortie first, then open the flight plan again');
@@ -2962,7 +2990,7 @@ function importForeFlightArea() {
     input.remove();
     if (!file) return;
     try {
-      const parsed = parseFplWaypoints(await file.text());
+      const parsed = parseFplWaypoints(decodeTextBytes(new Uint8Array(await file.arrayBuffer())));
       fplImport = { name: file.name, points: parsed.points, rule: parsed.rule };
       fplImportSheet();
     } catch (err) {
@@ -4755,7 +4783,7 @@ function importJSON() {
     input.remove();
     if (!file) return;
     try {
-      importBackupText(await file.text());
+      importBackupText(decodeTextBytes(new Uint8Array(await file.arrayBuffer())));
     } catch (err) {
       console.warn(err);
       toast('Could not import that file');
