@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.4';
+const APP_VERSION = '1.23.5';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1694,9 +1694,13 @@ function normalizeState(raw) {
     missions.push(mission);
   });
   const activeLogRaw = normalized.logs.find(l => l.id === raw.activeId);
+  // '' means no mission is picked (one was just closed); before 1.22.0 there
+  // was no such field, so pick the open sortie's mission or the newest open one.
+  const newestOpen = missions.filter(m => !m.closed).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
   const activeMissionId = missions.some(m => m.id === raw.activeMissionId) ? raw.activeMissionId
-    : activeLogRaw ? activeLogRaw.missionId
-      : (missions.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || {}).id || '';
+    : raw.activeMissionId === '' ? ''
+      : activeLogRaw ? activeLogRaw.missionId
+        : (newestOpen || {}).id || '';
   normalized.activeMissionId = activeMissionId;
   normalized.activeId = activeLogRaw && activeLogRaw.missionId === activeMissionId ? activeLogRaw.id : '';
   // Finger became the sketch default in 1.3.8. State saved before that carries
@@ -2038,11 +2042,12 @@ function renderStrip() {
   if (!main || !sub) return;
 
   // Header reads: mission number, then the sortie, its callsign and crew names.
-  main.textContent = mission ? (mission.number || 'Mission') : 'New Mission';
+  const any = state.missions.length > 0;
+  main.textContent = mission ? (mission.number || 'Mission') : any ? 'Missions' : 'New Mission';
   // Until a sortie is open, an arrow points at the next step.
   const callout = $('#stripCallout');
   if (callout) callout.hidden = !!log;
-  if (callout) callout.textContent = mission ? 'Add a sortie' : 'Start Here';
+  if (callout) callout.textContent = mission ? 'Add a sortie' : any ? 'Pick a mission' : 'Start Here';
   const sortieBtn = $('#sortieSwitch');
   if (sortieBtn) sortieBtn.hidden = !log;
   if (sortieBtn && log) $('#sortieLabel').textContent = sortieLabel(log, missionSorties(log).indexOf(log));
@@ -2321,31 +2326,44 @@ function closedBadge(mission) {
 /* ---------- Missions tab ----------
    The first tab: the picked mission with its sorties, then every other mission
    on this iPad, newest first. Missions come from WMIRS; + adds one here. */
+function missionRowHTML(mission) {
+  const sorties = missionSorties(mission.id);
+  const missionHobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
+  const meta = [mission.name, mission.symbol, mission.date, mission.base,
+    sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
+    missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
+  return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(mission.id)}">
+    <span class="log-name">${esc(missionTitle(mission))}</span>
+    <span class="log-meta">${esc(meta)}</span>
+    <svg class="row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>`;
+}
+
+/* Missions: the picked mission on top, then the other open missions, then the
+   closed ones. Closing a mission moves it down to Closed missions; tapping a
+   closed mission brings it back up to look at or reopen. */
 function logbookView() {
   const active = activeMission();
-  const previous = missionsInOrder().filter(m => m !== active);
+  const others = missionsInOrder().filter(m => m !== active);
+  const open = others.filter(m => !m.closed);
+  const closed = others.filter(m => m.closed);
   const hobbs = state.logs.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
   const nm = state.logs.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
-  const rows = previous.map(mission => {
-    const sorties = missionSorties(mission.id);
-    const missionHobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
-    const meta = [mission.name, mission.symbol, mission.date, mission.base,
-      sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
-      missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
-    return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(mission.id)}">
-      <span class="log-name">${esc(missionTitle(mission))} ${closedBadge(mission)}</span>
-      <span class="log-meta">${esc(meta)}</span>
-      <svg class="row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button>`;
-  }).join('');
   return `<div class="stack">
     ${active ? activeMissionHTML(active) : ''}
+    ${open.length || !active ? `<section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>${active ? 'Other open missions' : 'Open missions'}</h2><span class="count-badge">${open.length}</span></div>
+      </div>
+      ${open.length ? `<div class="log-list">${open.map(missionRowHTML).join('')}</div>`
+        : `<div class="empty"><strong>No open missions</strong>Tap + to add a mission from WMIRS.</div>`}
+    </section>` : ''}
     <section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>${active ? 'Previous missions' : 'Missions'}</h2><span class="count-badge">${previous.length}</span></div>
+        <div class="head-left"><h2>Closed missions</h2><span class="count-badge">${closed.length}</span></div>
       </div>
-      ${rows ? `<div class="log-list">${rows}</div>`
-        : `<div class="empty"><strong>${active ? 'No other missions' : 'No missions yet'}</strong>Tap + to add a mission from WMIRS.</div>`}
+      ${closed.length ? `<div class="log-list">${closed.map(missionRowHTML).join('')}</div>`
+        : '<div class="empty"><strong>No closed missions</strong>A mission moves here once you close it.</div>'}
       <div class="totals" style="grid-template-columns:repeat(3,1fr)">
         <div class="total"><div class="tl">Sorties</div><div class="tv">${state.logs.length}</div></div>
         <div class="total"><div class="tl">Hobbs</div><div class="tv">${fmtDecimal(hobbs, 1) || '0.0'}</div></div>
@@ -2357,13 +2375,29 @@ function logbookView() {
   ${fabHTML('new-mission', 'Add a mission')}`;
 }
 
+// Close or reopen a mission. Closing puts it away: it leaves the top of
+// Missions for Closed missions, and its sortie tabs close.
+function setMissionClosed(mission, closed) {
+  mission.closed = closed;
+  mission.updatedAt = Date.now();
+  if (closed && state.activeMissionId === mission.id) {
+    state.activeMissionId = '';
+    state.activeId = '';
+    activeTab = 'logbook';
+  }
+  save();
+  closeSheet();
+  render();
+  toast('Mission ' + missionTitle(mission) + (closed ? ' closed · moved to Closed missions' : ' reopened'));
+}
+
 // The picked mission, at the top of Missions: its sorties and the way to add one.
 function activeMissionHTML(mission) {
   const sorties = missionSorties(mission.id);
   const meta = [mission.symbol, mission.date, mission.base].filter(Boolean).join(' · ');
   return `<section class="card card-current active-mission">
     <div class="card-head">
-      <div class="head-left"><h2>Active mission</h2></div>
+      <div class="head-left"><h2>${mission.closed ? 'Closed mission' : 'Active mission'}</h2></div>
       <button class="btn small" data-act="edit-mission">Mission details</button>
     </div>
     <div class="active-mission-title">
@@ -3126,7 +3160,7 @@ function closeSortie() {
   const open = missionSorties(log).filter(l => !l.closed).length;
   if (!open && !mission.closed) {
     toast(sortieLabel(log, missionSorties(log).indexOf(log)) + ' closed · all sorties of ' + missionTitle(mission) + ' are closed',
-      'Close mission', () => { mission.closed = true; mission.updatedAt = Date.now(); save(); render(); toast('Mission ' + missionTitle(mission) + ' closed'); });
+      'Close mission', () => setMissionClosed(mission, true));
   } else {
     toast(sortieLabel(log, missionSorties(log).indexOf(log)) + ' closed');
   }
@@ -4544,7 +4578,7 @@ function deleteMission() {
     (sorties.length === 1 ? '' : 's') + '? This cannot be undone.')) return;
   state.logs = state.logs.filter(l => l.missionId !== mission.id);
   state.missions = state.missions.filter(m => m !== mission);
-  state.activeMissionId = (missionsInOrder()[0] || {}).id || '';
+  state.activeMissionId = (missionsInOrder().find(m => !m.closed) || {}).id || '';
   state.activeId = '';
   activeTab = 'logbook';
   closeSheet();
@@ -4781,7 +4815,7 @@ function importBackupText(text) {
     state.activeId = lastId;
     activeTab = defaultTab();
   } else if (!activeMission()) {
-    state.activeMissionId = (missionsInOrder()[0] || {}).id || '';
+    state.activeMissionId = (missionsInOrder().find(m => !m.closed) || {}).id || '';
     state.activeId = '';
   }
   if (data.settings) {
@@ -5771,16 +5805,14 @@ const actions = {
     render();
     toast('Find the steps later under Menu → Help & install');
   },
-  'edit-mission': () => openMissionSheet(),
+  'edit-mission': () => {
+    // with missions but none picked, the header points at Missions
+    if (!activeMission() && state.missions.length) { switchTab('logbook'); return; }
+    openMissionSheet();
+  },
   'toggle-mission-closed': () => {
     const mission = activeMission();
-    if (!mission) return;
-    mission.closed = !mission.closed;
-    mission.updatedAt = Date.now();
-    save();
-    closeSheet();
-    render();
-    toast('Mission ' + missionTitle(mission) + (mission.closed ? ' closed' : ' reopened'));
+    if (mission) setMissionClosed(mission, !mission.closed);
   },
   'show-missions': () => switchTab('logbook'),
   'open-mission': el => {
