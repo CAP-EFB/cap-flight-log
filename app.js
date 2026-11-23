@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.28.0';
+const APP_VERSION = '1.28.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1687,6 +1687,7 @@ function refreshFlyView(log) {
   logEl.setAttribute('aria-hidden', flyLogOpen ? 'false' : 'true');
   drawTrackOnMap();
   placeHobbsPopover();   // the buttons were redrawn: re-point the keypad's arrow
+  refreshObsPop();
   return true;
 }
 
@@ -1877,6 +1878,7 @@ function autoGpsObservation(obs) {
       const card = activeTab === 'fly' ? $('.obs[data-obs-id="' + obs.id + '"]') : null;
       applyGpsToObservation(obs, fix, card || null);
       save();
+      refreshObsPop();
     })
     .catch(reportGpsError);
 }
@@ -5619,16 +5621,88 @@ function addObservation() {
   activeTab = 'fly';
   render();
   if (!fix && state.settings.gpsLive) autoGpsObservation(obs);
-  requestAnimationFrame(() => {
-    const last = $('.obs[data-obs-id="' + obs.id + '"]');
-    if (last) {
-      const area = last.querySelector('textarea');
-      if (area) {
-        area.focus({ preventScroll: true });
-        last.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
-    }
-  });
+  // a note box at the top of the map, where the keyboard cannot cover it
+  openObsPop(obs.id);
+  haptic('MEDIUM');
+}
+
+/* ---------- Fly: a new observation ----------
+   A compact box at the top of the map: when and where, the note, photos.
+   The full card (time, Hobbs, position) is in the flight log. */
+function obsPopInner(log, obs) {
+  const index = log.observations.indexOf(obs);
+  const photos = Array.isArray(obs.photos) ? obs.photos : [];
+  const where = obs.lat && obs.lon ? obs.lat + '  ' + obs.lon : 'No position yet';
+  return `<div class="obs-pop-head">
+      <strong>Observation ${index + 1}</strong>
+      <span class="mono">${esc(fmtZ(obs.time))}</span>
+      <span class="obs-pop-where mono" id="obs-pop-where">${esc(where)}${obs.gpsAccuracy ? ' · ±' + esc(obs.gpsAccuracy) + ' m' : ''}</span>
+    </div>
+    <textarea class="input obs-pop-text" data-bind="observations.${index}.text" rows="3"
+      placeholder="What did you see? Include altitude, heading, and anything distinctive.">${esc(obs.text)}</textarea>
+    <div class="obs-pop-foot">
+      <div class="obs-pop-photos">
+        ${photos.map(photo => `<img src="${esc(photo.thumb || photo.data)}" alt="">`).join('')}
+        ${photos.length < MAX_OBS_PHOTOS ? `<button type="button" class="btn small" data-act="add-photo" data-obs="${esc(obs.id)}">${PHOTO_ICON}Photo</button>` : ''}
+      </div>
+      <button type="button" class="btn small" data-act="obs-pop-discard">Discard</button>
+      <button type="button" class="btn small primary" data-act="obs-pop-done">Done</button>
+    </div>`;
+}
+
+function openObsPop(obsId) {
+  const shell = $('#fly-shell');
+  const log = activeLog();
+  const obs = log.observations.find(o => o.id === obsId);
+  if (!shell || !obs) return;
+  closeHobbsPopover(false);
+  let pop = $('#obs-pop');
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.className = 'obs-pop';
+    pop.id = 'obs-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'New observation');
+    shell.appendChild(pop);
+  }
+  pop.dataset.obs = obs.id;
+  pop.innerHTML = obsPopInner(log, obs);
+  const area = pop.querySelector('textarea');
+  if (area) {
+    area.focus({ preventScroll: true });
+    // focusing must not scroll the map out of its frame
+    requestAnimationFrame(() => { shell.scrollTop = 0; shell.scrollLeft = 0; });
+  }
+}
+
+// Redraw the box (a photo or a GPS position arrived), keeping the typing.
+function refreshObsPop() {
+  const pop = $('#obs-pop');
+  if (!pop) return;
+  const log = activeLog();
+  const obs = log.observations.find(o => o.id === pop.dataset.obs);
+  if (!obs) { pop.remove(); return; }
+  const area = pop.querySelector('textarea');
+  const focused = area && document.activeElement === area;
+  pop.innerHTML = obsPopInner(log, obs);
+  if (focused) pop.querySelector('textarea').focus({ preventScroll: true });
+}
+
+function closeObsPop(discard) {
+  const pop = $('#obs-pop');
+  if (!pop) return;
+  const log = activeLog();
+  const obs = log.observations.find(o => o.id === pop.dataset.obs);
+  pop.remove();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  if (discard && obs) {
+    log.observations = log.observations.filter(o => o !== obs);
+    save();
+    toast('Observation discarded');
+  } else if (obs) {
+    toast('Observation ' + (log.observations.indexOf(obs) + 1) + ' saved at ' + fmtZ(obs.time));
+  }
+  render();
 }
 
 function addOpsCheck() {
@@ -7267,6 +7341,14 @@ const actions = {
     if (panel.hidden) target.focus(); else target.blur();
   },
   'save-hobbs': el => saveHobbsFromSheet(el.dataset.id),
+  'obs-pop-done': () => closeObsPop(false),
+  'obs-pop-discard': () => {
+    const pop = $('#obs-pop');
+    const obs = pop && activeLog().observations.find(o => o.id === pop.dataset.obs);
+    const empty = obs && !String(obs.text || '').trim() && !(obs.photos && obs.photos.length);
+    if (!empty && !confirm('Discard this observation and its photos?')) return;
+    closeObsPop(true);
+  },
   'kp-pop-skip': () => closeHobbsPopover(),
   'hobbs-next': () => {
     const tach = $('#k-tach');
@@ -7796,6 +7878,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     if ($('#overlay').classList.contains('show')) closeSheet();
     else if (closeHobbsPopover()) { /* skipped the reading */ }
+    else if ($('#obs-pop')) closeObsPop(false);
     else if (activeTab === 'fly' && flyLogOpen) setFlyLog(false);
     else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   }
