@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.22.6';
+const APP_VERSION = '1.23.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -389,7 +389,7 @@ let trackPullTimer = null;
 const saveQuiet = () => save(true);
 
 function sortieRunning(log) {
-  return !!(log && sortieReady(log) && isValidTime(log.times.engineStart.time) && !log.times.shutDown.time);
+  return !!(log && sortieReady(log) && !log.closed && isValidTime(log.times.engineStart.time) && !log.times.shutDown.time);
 }
 
 async function pullTrack(log) {
@@ -1452,6 +1452,8 @@ function blankLog(missionId) {
     missionId: missionId || '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    closed: false,     // closed on the Close tab, once signed
+    closedAt: 0,
     sortie: '',        // WMIRS Sortie No., e.g. A0009
     sortieType: '',    // one of SORTIE_TYPES
     aircraft: '',      // Tail No.
@@ -1532,6 +1534,8 @@ function normalizeLog(raw) {
     else log.notes = ('CAP flight: ' + String(raw.capFlight).trim() + (log.notes ? '\n' + log.notes : ''));
   }
   delete log.capFlight;
+  log.closed = !!(raw && raw.closed === true);
+  log.closedAt = (raw && Number(raw.closedAt)) || 0;
   log.debrief = Object.assign(blankDebrief(), (raw && raw.debrief) || {});
   log.debrief.flightPlanClosed = log.debrief.flightPlanClosed === true;
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
@@ -2320,7 +2324,8 @@ function activeMissionHTML(mission) {
     ${sorties.length ? `<div class="log-list">${sorties.map(sortieCardRowHTML).join('')}</div>`
       : '<p class="sheet-note" style="margin-top:4px">No sorties yet. Add each air sortie of this mission as it is in WMIRS.</p>'}
     <div class="btn-row" style="margin-top:12px">
-      <button class="btn primary" data-act="add-sortie">+ Add sortie</button>
+      ${mission.closed ? '' : '<button class="btn primary" data-act="add-sortie">+ Add sortie</button>'}
+      <button class="btn" data-act="toggle-mission-closed">${mission.closed ? 'Reopen mission' : 'Close mission'}</button>
     </div>
   </section>`;
 }
@@ -2423,7 +2428,8 @@ function sortieCardRowHTML(l, index) {
   const times = l.times.engineStart.time
     ? fmtZ(l.times.engineStart.time) + (l.times.shutDown.time ? '–' + fmtZ(l.times.shutDown.time) : ' →')
     : 'not flown yet';
-  const signed = l.signoff.signature ? '<span class="sortie-signed">Signed</span>' : '';
+  const signed = l.closed ? '<span class="sortie-signed">Closed</span>'
+    : l.signoff.signature ? '<span class="sortie-signed">Signed</span>' : '';
   const meta = [l.sortieType, (l.aircraft || 'no tail') + (l.callsign ? ' · ' + l.callsign : ''), times,
     (l.entries.length + l.observations.length) + ' logged', crew.join(', '),
     l.receivedFrom ? 'from ' + l.receivedFrom : ''].filter(Boolean).join(' · ');
@@ -3002,8 +3008,19 @@ function fplImportSheet() {
   });
 }
 
+/* Close: sign the sortie off, then close it. A closed sortie is done (like a
+   completed sortie in WMIRS); it can be reopened. */
 function signView(log) {
-  return `<div class="stack"><section class="card">
+  const closedAt = log.closedAt ? new Date(log.closedAt) : null;
+  return `<div class="stack">
+  ${log.closed ? `<section class="card card-current">
+    <div class="card-head">
+      <div class="head-left"><h2>Sortie closed</h2><span class="sortie-signed">Closed</span></div>
+      <button class="btn small" data-act="reopen-sortie">Reopen</button>
+    </div>
+    <p class="sheet-note" style="margin-top:0">${esc(sortieLabel(log, missionSorties(log).indexOf(log)))} was closed${closedAt ? ' at ' + esc(fmtDateZ(closedAt)) : ''}.</p>
+  </section>` : ''}
+  <section class="card">
     <div class="card-head">
       <div class="head-left"><h2>Sign-off</h2></div>
       <button class="btn small" data-act="sign-now">Now (UTC)</button>
@@ -3026,14 +3043,39 @@ function signView(log) {
     <div class="sketch-hint">Sign with a finger or Apple Pencil. The signature is stored only on this device and appears on the printed log.</div>
   </section>
   <section class="card">
-    <button class="btn primary" data-act="share-log" style="width:100%">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>
-      </svg>
-      Share signed log (PDF)
-    </button>
-    <div class="sketch-hint">Builds the mission log PDF with this sign-off and opens the share sheet — AirDrop, Mail, Messages or Save to Files.</div>
+    <div class="btn-row">
+      ${log.closed ? '' : '<button class="btn primary" data-act="close-sortie" style="flex:1">Close sortie</button>'}
+      <button class="btn ${log.closed ? 'primary' : ''}" data-act="share-log" style="flex:1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>
+        </svg>
+        Share signed log (PDF)
+      </button>
+    </div>
+    <div class="sketch-hint">Close the sortie once it is signed and debriefed in WMIRS. Share builds the mission log PDF with this sign-off for AirDrop, Mail, Messages or Save to Files.</div>
   </section></div>`;
+}
+
+// Close the open sortie once it is signed; offer to close the mission when it
+// was the last open one.
+function closeSortie() {
+  const log = activeSortie();
+  if (!log) return;
+  if (sigCtl) sigCtl.flush();
+  if (!log.signoff.signature) { toast('Sign the sortie before closing it'); return; }
+  log.closed = true;
+  log.closedAt = Date.now();
+  if (!log.signoff.dateTime) log.signoff.dateTime = fmtDateZ(new Date());
+  save();
+  render();
+  const mission = missionOf(log);
+  const open = missionSorties(log).filter(l => !l.closed).length;
+  if (!open && !mission.closed) {
+    toast(sortieLabel(log, missionSorties(log).indexOf(log)) + ' closed · all sorties of ' + missionTitle(mission) + ' are closed',
+      'Close mission', () => { mission.closed = true; mission.updatedAt = Date.now(); save(); render(); toast('Mission ' + missionTitle(mission) + ' closed'); });
+  } else {
+    toast(sortieLabel(log, missionSorties(log).indexOf(log)) + ' closed');
+  }
 }
 
 function notesView(log) {
@@ -4436,6 +4478,7 @@ function createLog() {
 
 function addSortie() {
   if (!activeMission()) { openNewMissionSheet(); return; }
+  if (activeMission().closed) { closeSheet(); toast('Mission closed · reopen it to add a sortie'); return; }
   openAddSortieSheet();
 }
 
@@ -5939,6 +5982,16 @@ const actions = {
   },
   'send-sortie': () => exportSortie(),
   'sortie-menu': () => sortieSheet(),
+  'close-sortie': () => closeSortie(),
+  'reopen-sortie': () => {
+    const log = activeSortie();
+    if (!log) return;
+    log.closed = false;
+    log.closedAt = 0;
+    save();
+    render();
+    toast('Sortie reopened');
+  },
   'del-log': () => deleteLog(),
   'menu': () => menuSheet(),
   'settings': () => settingsSheet(),

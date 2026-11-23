@@ -10,7 +10,7 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 It follows WMIRS: a **mission** (Mission No., Name and Symbol, e.g. 27-T-3852 / A31) holds **air
 sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie from brief to signature:
-**Brief → Fly → Notes → Debrief → Sign**.
+**Brief → Fly → Notes → Debrief → Close**.
 
 - **Missions** — the first tab: the picked mission at the top with its sorties and + Add sortie, then the
   previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it; tapping a sortie opens its Brief. The sortie name in the header switches between the mission's sorties and stays on the same tab. The +
@@ -36,7 +36,9 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
   (with WMIRS's character limits), Sortie Effectiveness and the reason if not successful. The CAPF 104a
   actual column and search effectiveness follow.
-- **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
+- **Close** — sign the sortie off (printed name, CAPID, UTC date/time and a signature), then Close sortie.
+  A closed sortie shows Closed on Missions and can be reopened. Closing a mission's last open sortie
+  offers to close the mission. Share signed log (PDF) is here too.
 - **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header, once the open
   sortie has its first checkpoint. Switch Live GPS
   off in Settings to save battery.
