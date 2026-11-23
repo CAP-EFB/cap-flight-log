@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.27.1';
+const APP_VERSION = '1.27.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1570,6 +1570,8 @@ function drawTrackOnMap(fit) {
    log bottom left, and the map switch bottom right. The map is built once
    and kept while Fly is open; a redraw only replaces the floating controls. */
 let flyLogOpen = false;
+// The position card over the map: hidden until the header's position is tapped.
+let flyPosOpen = false;
 
 // The checkpoint to tap next: the first in flight order not yet stamped.
 function nextCheckpointKind(log) {
@@ -1614,7 +1616,7 @@ function flyOverlayHTML(log) {
   const next = nextCheckpointKind(log);
   const count = log.entries.length + log.observations.length;
   return `<div class="fly-top">
-      <div class="pos-panel fly-panel">
+      <div class="pos-panel fly-panel" id="fly-pos" data-act="fly-pos-hide" role="button" aria-label="Hide the position" ${flyPosOpen ? '' : 'hidden'}>
         <div id="pos-text">${positionFixHTML(freshFix())}</div>
         <div class="pos-note" id="pos-note">${esc(chartNoteText(chartLayerKey()))}</div>
       </div>
@@ -1696,6 +1698,14 @@ function placeFlyShell() {
   if (shell.style.top === top) return;
   shell.style.top = top;
   if (positionMap) positionMap.map.invalidateSize();
+}
+
+function setFlyPos(open) {
+  flyPosOpen = open;
+  const card = $('#fly-pos');
+  if (card) card.hidden = !open;
+  const chip = $('#gpsChip');
+  if (chip) chip.classList.toggle('open', open && activeTab === 'fly');
 }
 
 function setFlyLog(open) {
@@ -2914,6 +2924,8 @@ function render() {
   renderStrip();
   renderGpsChip();
   renderTabbar();
+  const chip = $('#gpsChip');
+  if (chip) chip.classList.toggle('open', activeTab === 'fly' && flyPosOpen);
   const view = $('#view');
   if (!view) return;
   const log = activeLog();
@@ -7252,10 +7264,15 @@ const actions = {
       if (gpsState === 'unavailable') { toast(gpsErrorText(window.isSecureContext ? { unsupported: true } : { secure: true })); return; }
       if (gpsWatchId == null) startGpsWatch();
     }
-    // the header's position opens Fly's moving map, centred on the aircraft
+    // the header's position shows the position card on Fly's map, centred on
+    // the aircraft; tapped again on Fly, it hides the card
+    if (activeTab === 'fly' && flyPosOpen) { setFlyPos(false); return; }
+    flyPosOpen = true;
     if (activeTab !== 'fly') switchTab('fly');
+    else setFlyPos(true);
     actions['pos-recenter']();
   },
+  'fly-pos-hide': () => setFlyPos(false),
   'pos-recenter': () => {
     const fix = freshFix() || lastGpsFix;
     if (!positionMap) return;
