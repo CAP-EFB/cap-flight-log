@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.22.0';
+const APP_VERSION = '1.22.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1945,11 +1945,7 @@ function renderStrip() {
   if (callout) callout.textContent = mission ? 'Add a sortie' : 'Start Here';
   const sortieBtn = $('#sortieSwitch');
   if (sortieBtn) sortieBtn.hidden = !log;
-  if (sortieBtn && log) {
-    const sorties = missionSorties(log);
-    $('#sortieLabel').textContent = sortieLabel(log, sorties.indexOf(log)) +
-      (sorties.length > 1 ? ' of ' + sorties.length : '');
-  }
+  if (sortieBtn && log) $('#sortieLabel').textContent = sortieLabel(log, missionSorties(log).indexOf(log));
   if (!log) { sub.textContent = ''; return; }
   const rest = [log.callsign, ...crewInOrder(log).map(m => m.name)]
     .map(value => String(value || '').trim())
@@ -2562,6 +2558,9 @@ function planView(log) {
       <div class="form-grid" style="margin-top:14px">
         ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
         ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button type="button" class="btn small danger" data-act="del-log">Delete sortie</button>
       </div>
     </section>
 
@@ -4420,34 +4419,6 @@ function deleteLog() {
   toast('Sortie deleted');
 }
 
-function sortieRowHTML(l, index) {
-  const start = l.times.engineStart.time ? fmtZ(l.times.engineStart.time) : 'not started';
-  return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
-    <span class="log-name">${esc(sortieLabel(l, index))}</span>
-    <span class="log-meta">${esc([l.sortieType, l.aircraft || 'no tail', start].filter(Boolean).join(' · '))} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
-  </button>`;
-}
-
-// Header switcher: the sorties of this mission, and + Sortie.
-function sortieSheet() {
-  const log = activeLog();
-  const sorties = missionSorties(log);
-  openSheet({
-    title: 'Sorties',
-    sub: missionTitle(missionOf(log)) + ' · ' + sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
-    body: `
-      <div class="log-list">${sorties.map(sortieRowHTML).join('')}</div>
-      <div class="sheet-note">
-        + Sortie adds the next sortie of this mission with the same crew, frequencies and search area.
-        Send to crew shares this sortie by AirDrop; they save it to Files and use Menu → Import backup.
-      </div>
-    `,
-    footer: `<button type="button" class="btn danger left" data-act="del-log">Delete this sortie</button>
-      <button type="button" class="btn" data-act="send-sortie">Send to crew</button>
-      <button type="button" class="btn primary" data-act="add-sortie">+ Sortie</button>`
-  });
-}
-
 function slug(value) {
   return String(value || 'mission').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 42) || 'mission';
@@ -5897,7 +5868,6 @@ const actions = {
     });
   },
   'send-sortie': () => exportSortie(),
-  'sortie-menu': () => sortieSheet(),
   'del-log': () => deleteLog(),
   'menu': () => menuSheet(),
   'settings': () => settingsSheet(),

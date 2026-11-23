@@ -38,7 +38,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
 - **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header. Switch Live GPS
   off in Settings to save battery.
-- **Send sortie to crew** — Menu → Send sortie to crew (or the header's sortie switcher) shares only the
+- **Send sortie to crew** — Menu → Send sortie to crew shares only the
   current sortie by AirDrop, Messages or Mail. The crew member saves it to Files and uses Menu → Import
   backup; it joins their copy of the mission (matched by mission number) as its own sortie, with the
   sign-off left for them to complete.

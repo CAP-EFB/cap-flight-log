@@ -275,7 +275,7 @@ h1, h2, h3, p { margin: 0; }
   height: 30px;
   background: rgba(255, 255, 255, .28);
 }
-/* mission number, sortie switcher, then callsign and crew */
+/* mission number, sortie, then callsign and crew */
 .mission-bar {
   flex: 1;
   min-width: 0;
@@ -306,24 +306,13 @@ h1, h2, h3, p { margin: 0; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sortie-switch {
+.sortie-name {
   flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 0 8px 0 10px;
-  border: 1px solid rgba(255, 255, 255, .18);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .07);
   color: var(--chrome-text);
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
-  cursor: pointer;
 }
-.sortie-switch svg { width: 14px; height: 14px; color: var(--chrome-muted); }
-.sortie-switch:active { background: var(--chrome-press); }
 .mission-strip-sub {
   flex: 1;
   min-width: 0;
@@ -1229,7 +1218,7 @@ a.menu-item { text-decoration: none; }
 .step.done .step-num { background: var(--green-soft); color: var(--green); }
 .step.now { color: var(--text); border-color: var(--blue); }
 .step.now .step-num { background: var(--blue-btn); color: #fff; }
-.sortie-switch[hidden] { display: none; }
+.sortie-name[hidden] { display: none; }
 .card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
 /* sortie tabs stay shut until the mission has a sortie */
 .tabbar.locked .tab:not([data-tab="logbook"]) { opacity: .38; }
