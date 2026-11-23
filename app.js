@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.22.3';
+const APP_VERSION = '1.22.4';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2278,10 +2278,16 @@ function activeMissionHTML(mission) {
   </section>`;
 }
 
-// The round add button in the bottom corner: a mission on Missions, a sortie on Brief.
-function fabHTML(act, label) {
+const FAB_ICONS = {
+  plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+  // the Fly tab's aeroplane
+  fly: '<path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+};
+
+// The round button in the bottom corner: add a mission on Missions, go fly on Brief.
+function fabHTML(act, label, icon) {
   return `<button type="button" class="fab" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true">${FAB_ICONS[icon || 'plus']}</svg>
   </button>`;
 }
 
@@ -2655,7 +2661,7 @@ function planView(log) {
       <div class="nav-grid">${navRows}</div>
     </section>
   </div>
-  ${fabHTML('add-sortie', 'Add the next sortie')}`;
+  ${fabHTML('start-flight-log', 'Start the flight log', 'fly')}`;
 }
 
 /* Debrief, in the order of the WMIRS Air Sortie Debrief: flight plan closed,
@@ -5659,6 +5665,8 @@ const actions = {
   'nm-save': () => saveNewMission(),
   'nm-today': () => { const d = $('#nm-date'); if (d) d.value = todayMissionDate(); },
   'ns-save': () => saveAddSortie(),
+  // from Brief: on to Fly, where the sortie's flight log is kept
+  'start-flight-log': () => switchTab('fly'),
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
     const card = $('#ops-card');

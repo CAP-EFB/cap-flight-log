@@ -23,7 +23,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 - **Brief** — the sortie's WMIRS fields, crew (MP, MO, MS, AP, RO, PAX), Sortie Objectives, Sortie
   Deliverables and Route Of Flight from the WMIRS brief, flight profile, the search area (corners, entry
   and exit points, ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a),
-  frequencies (including Air/Ground, Air/Air and base) and nav aids.
+  frequencies (including Air/Ground, Air/Air and base) and nav aids. The aeroplane button goes on to Fly.
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
