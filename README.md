@@ -18,7 +18,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   details can close a mission once it is closed in WMIRS.
 - **Adding a sortie** — the WMIRS Air Sortie Add/Edit fields: Sortie No. (the next one is suggested),
   Sortie Type (the WMIRS list), Tail No., Call Sign, Dep. and Dest. Airport. A mission's next sortie
-  copies the crew, frequencies, nav aids and search area from its last one. Brief…Sign open once a
+  copies the crew, frequencies, nav aids and search area from its last one. Brief…Close open once a
   sortie is open.
 - **Brief** — the sortie's WMIRS fields, crew (MP, MO, MS, AP, RO, PAX), Sortie Objectives, Sortie
   Deliverables and Route Of Flight from the WMIRS brief, flight profile, the search area (corners, entry
