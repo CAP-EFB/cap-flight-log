@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.6';
+const APP_VERSION = '1.23.7';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1450,7 +1450,6 @@ function blankMission() {
     name: '',      // Mission Name
     symbol: '',    // Mission Symbol, e.g. A31
     date: '',      // DD MMM YY, as on the CAPF 104a
-    base: '',
     closed: false,
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -1460,7 +1459,7 @@ function blankMission() {
 function normalizeMission(raw) {
   const mission = blankMission();
   if (!raw || typeof raw !== 'object') return mission;
-  ['id', 'number', 'name', 'symbol', 'date', 'base'].forEach(key => {
+  ['id', 'number', 'name', 'symbol', 'date'].forEach(key => {
     if (raw[key] != null && raw[key] !== '') mission[key] = String(raw[key]);
   });
   mission.closed = raw.closed === true;
@@ -1569,6 +1568,8 @@ function normalizeLog(raw) {
   // Mission fields were copied onto every sortie before 1.22.0; they now live on
   // the mission (see splitLegacyLogs).
   delete log.mission;
+  // WMIRS missions have no base; an old base becomes the sortie's departure
+  if (raw && raw.base && !log.depAirport) log.depAirport = String(raw.base).trim().toUpperCase();
   delete log.base;
   delete log.missionCreated;
   delete log.started;
@@ -1651,12 +1652,11 @@ function splitLegacyLogs(rawLogs) {
     const date = String((raw.sar && raw.sar.missionDate) || '');
     let mission = missions.find(m => m.id === raw.missionId);
     if (!mission && (created || started || logged)) {
-      mission = normalizeMission({ id: raw.missionId, number, date, base: raw.base, createdAt: raw.createdAt });
+      mission = normalizeMission({ id: raw.missionId, number, date, createdAt: raw.createdAt });
       missions.push(mission);
     } else if (mission) {
       if (!mission.number) mission.number = number;
       if (!mission.date) mission.date = date;
-      if (!mission.base && raw.base) mission.base = String(raw.base);
       if (raw.createdAt && raw.createdAt < mission.createdAt) mission.createdAt = raw.createdAt;
     }
     // a placeholder with nothing logged was only the mission
@@ -2330,7 +2330,7 @@ function closedBadge(mission) {
 function missionRowHTML(mission) {
   const sorties = missionSorties(mission.id);
   const missionHobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
-  const meta = [mission.name, mission.symbol, mission.date, mission.base,
+  const meta = [mission.name, mission.symbol, mission.date,
     sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
     missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
   return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(mission.id)}">
@@ -2395,7 +2395,7 @@ function setMissionClosed(mission, closed) {
 // The picked mission, at the top of Missions: its sorties and the way to add one.
 function activeMissionHTML(mission) {
   const sorties = missionSorties(mission.id);
-  const meta = [mission.symbol, mission.date, mission.base].filter(Boolean).join(' · ');
+  const meta = [mission.symbol, mission.date].filter(Boolean).join(' · ');
   return `<section class="card card-current active-mission">
     <div class="card-head">
       <div class="head-left"><h2>${mission.closed ? 'Closed mission' : 'Active mission'}</h2></div>
@@ -2441,7 +2441,6 @@ function missionFieldsHTML(values, bind) {
           ${input('date', { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
           <button type="button" class="mini" data-act="${bind ? 'mission-today' : 'nm-today'}">Today</button>
         </div></label>
-      <label class="field"><span>Base</span>${input('base', { autocap: 'characters', placeholder: 'KBED' })}</label>
     </div>`;
 }
 
@@ -2496,7 +2495,6 @@ function saveNewMission() {
   mission.symbol = read('symbol').toUpperCase();
   mission.name = read('name');
   mission.date = read('date').toUpperCase();
-  mission.base = read('base').toUpperCase();
   state.missions.push(mission);
   state.activeMissionId = mission.id;
   state.activeId = '';
@@ -2553,8 +2551,8 @@ function openAddSortieSheet() {
         </select></label>
       <label class="field"><span>Tail No.</span>${input('tail', prev && prev.aircraft, 'N123CP')}</label>
       <label class="field"><span>Call Sign</span>${input('callsign', prev && prev.callsign, 'CAP1234')}</label>
-      <label class="field"><span>Dep. Airport</span>${input('dep', prev ? prev.destAirport || mission.base : mission.base, 'KBED')}</label>
-      <label class="field"><span>Dest. Airport</span>${input('dest', mission.base, 'KBED')}</label>
+      <label class="field"><span>Dep. Airport</span>${input('dep', prev && prev.destAirport, 'KBED')}</label>
+      <label class="field"><span>Dest. Airport</span>${input('dest', prev && prev.destAirport, 'KBED')}</label>
     </div>
     <p class="sheet-note">As in WMIRS. ${prev ? 'Crew, frequencies, nav aids and the search area are copied from ' + esc(sortieLabel(prev, sorties.length - 1)) + '.' : 'Crew, frequencies and the search area are set up on Brief.'}</p>`,
     footer: `<button type="button" class="btn" data-close>Cancel</button>
