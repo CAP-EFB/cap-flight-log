@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.37.0';
+const APP_VERSION = '1.37.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -9258,6 +9258,58 @@ function setupCaretTaps() {
 }
 
 setupCaretTaps();
+
+/* The notes look like ruled paper, so a tap on an empty line below the text
+   puts the cursor on that line, as on paper: the text is carried down with
+   blank lines to reach it. Blank lines left unused at the end go when the
+   box is left. */
+function notesTextLines(el) {
+  const cs = getComputedStyle(el);
+  const mirror = document.createElement('div');
+  CARET_MIRROR_PROPS.forEach(prop => { mirror.style[prop] = cs[prop]; });
+  Object.assign(mirror.style, {
+    position: 'fixed', left: '0', top: '0', margin: '0', boxSizing: 'border-box',
+    width: el.offsetWidth + 'px', height: 'auto', borderStyle: 'solid', borderColor: 'transparent',
+    visibility: 'hidden', pointerEvents: 'none', whiteSpace: 'pre-wrap', overflowWrap: 'break-word'
+  });
+  // a zero-width character so a final empty line still counts
+  mirror.textContent = el.value + '​';
+  document.body.appendChild(mirror);
+  const inner = mirror.offsetHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) -
+    parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth);
+  mirror.remove();
+  return Math.max(1, Math.round(inner / parseFloat(cs.lineHeight)));
+}
+
+document.addEventListener('click', event => {
+  const el = event.target;
+  if (!el || el.id !== 'notes-text') return;
+  if (el.selectionStart !== el.selectionEnd) return;
+  const cs = getComputedStyle(el);
+  const lineHeight = parseFloat(cs.lineHeight);
+  const rect = el.getBoundingClientRect();
+  const y = event.clientY - rect.top - parseFloat(cs.borderTopWidth) - parseFloat(cs.paddingTop) + el.scrollTop;
+  const tapped = Math.floor(y / lineHeight);
+  const lines = notesTextLines(el);
+  if (tapped < lines) return;   // on the text: the caret goes where it was tapped
+  el.value += '\n'.repeat(tapped - lines + 1);
+  const end = el.value.length;
+  el.setSelectionRange(end, end);
+  // hold it against iOS putting the caret back at the end of the last word
+  caretPin = { el, index: end, until: Date.now() + 300 };
+  [0, 60, 200].forEach(delay => setTimeout(holdCaretPin, delay));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+});
+
+document.addEventListener('focusout', event => {
+  const el = event.target;
+  if (!el || el.id !== 'notes-text') return;
+  const trimmed = el.value.replace(/\n[ \t]*(?=\n*$)/g, '').replace(/\n+$/, '');
+  if (trimmed !== el.value) {
+    el.value = trimmed;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+});
 
 /* =========================================================================
    App updates
