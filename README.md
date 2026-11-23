@@ -38,25 +38,20 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   slides up the timeline of entries and observations (up to six photos each) and the OPS checks with their
   next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
 - **Notes** — free text, the whole page, shrinking above the keyboard.
-- **Sketch** — a sketch pad filling everything between the header and the tab bar: each page takes the
-  shape of the screen it was started on, and the tools (backgrounds, Undo/Redo, Clear, pages) sit in a
-  row of the header.
-  - **Map pages** (Sectional, Topo, Terrain) are the live chart: pan and pinch-zoom it, and draw on it; the
-    drawing stays where it was drawn and scales with the chart. In the iPad app this is PencilKit with
-    Apple's tools: the canvas covers the page's region of the map (Web Mercator pixels at zoom 12, about
-    330 km square, around where the page started) and the web map under it follows its pan and zoom on
-    every frame. Two fingers (or one, with Only Draw with Apple Pencil on) move the map. In a browser,
-    lines are kept in latitude and longitude, with a hand tool, three pens and an eraser. The page's PDF
-    picture is the view on screen. Saved offline maps work here too.
-  - **Paper pages** (Grid, Plain) are drawn with PencilKit in the iPad app. A drawn page keeps its kind;
-    choosing the other kind starts a new page. In the iPad app it is PencilKit: Apple's tool palette (pens, marker, pencil, eraser,
-  lasso, ruler, colours), pressure and tilt, palm rejection (a finger draws unless Only Draw with Apple
-  Pencil is on in iPad Settings), pinch to zoom up to 5×, and Undo/Redo. The page's background zooms under
-  the strokes; each page keeps its PencilKit drawing (to edit again) and a PNG of its ink. Ink from before
-  PencilKit stays under the new strokes. In a browser, Pencil pressure sets the line, strokes are smoothed
-  from every sampled point, and a resting palm is ignored once the Pencil has drawn. Add as many pages as needed; each page has its own background: grid, plain, or the
-  FAA sectional, USGS topographic or USGS terrain map around the search area (saved with the page, so it
-  shows offline). The eraser removes only ink. Every page with something on it goes in the PDF.
+- **Sketch** — a sketch pad filling everything between the header and the tab bar, with its tools
+  (backgrounds, Undo/Redo, Clear, pages) in a row of the header. Each page is a canvas you pan and zoom,
+  anchored to a piece of the map around the search area (Web Mercator pixels at zoom 12, about 330 km
+  square). Its background is a layer under the drawing: endless graph paper (Grid), white (Plain), the FAA
+  sectional, the USGS topographic map, or Esri's shaded relief with lakes and rivers (Terrain). Switching
+  background keeps the drawing where it is, so a sketch made on the grid lands on the chart in place.
+  - In the iPad app the drawing is PencilKit: Apple's tool palette (pens, marker, pencil, eraser, lasso,
+    ruler, colours), pressure and tilt, palm rejection, Undo/Redo. The canvas takes the fingers (two to
+    move, or one with Only Draw with Apple Pencil on) and reports its pan and zoom on every frame; the
+    web map under it follows.
+  - In a browser, lines are kept in latitude and longitude, with a hand tool, three pens and an eraser.
+  - Each page's PDF picture is the view on screen. Saved offline maps work here too.
+  - Pages drawn before 1.35.0 on fixed-size paper keep that page (grid or plain); a map for one starts a
+    new page.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), with
   REC in the header while it records. Shown on the chart (Sectional, Topo or Terrain) with each checkpoint marked by its Fly button
   icon, over the ForeFlight plan the search area was filled from (dashed, waypoints named on tap); summed

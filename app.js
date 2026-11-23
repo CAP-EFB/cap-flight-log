@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.34.1';
+const APP_VERSION = '1.35.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -864,44 +864,29 @@ function capCellName(lat, lon) {
    service and need a connection, unless the sortie saved them (Offline maps). */
 const SECTIONAL_TILES = 'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/VFR_Sectional/MapServer/tile/{z}/{y}/{x}';
 
-/* Maps for the chart and the sketch pad: the FAA sectional, and the USGS
-   National Map's topographic map and shaded relief. All three allow their
-   tiles in a canvas, so a sketch page can keep a picture of them. */
+/* Maps for the chart and the sketch pad: the FAA sectional, the USGS
+   National Map's topographic map, and Esri's shaded relief (terrain in natural
+   colours with lakes and rivers). All three allow their tiles in a canvas, so
+   a sketch page can keep a picture of them. */
 const CHART_LAYERS = {
   sectional: { label: 'Sectional', short: 'Sectional', url: SECTIONAL_TILES, minNative: 8, maxNative: 12,
     source: 'FAA sectional', attribution: 'FAA AIS · not for navigation' },
   topo: { label: 'Topographic', short: 'Topo', url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
     minNative: 0, maxNative: 16, source: 'USGS topographic map', attribution: 'USGS The National Map · not for navigation' },
-  // elevation-tinted hillshade from USGS 3DEP, drawn to order for each tile
-  terrain: { label: 'Terrain', short: 'Terrain', exportUrl: 'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage',
-    rendering: 'Hillshade Elevation Tinted',
-    minNative: 0, maxNative: 16, source: 'USGS 3DEP terrain', attribution: 'USGS 3DEP · not for navigation' }
+  // relief shading in natural colours, with lakes and rivers; Esri's detail stops at 13
+  terrain: { label: 'Terrain', short: 'Terrain', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+    minNative: 0, maxNative: 13, source: 'Esri shaded relief', attribution: 'Esri, USGS, NOAA · not for navigation' }
 };
 
 const EARTH_HALF = Math.PI * 6378137;   // half the Web Mercator world, metres
-
-// A Web Mercator box (metres) drawn as a w×h image by an ArcGIS image server.
-function chartExportUrl(chart, bbox, w, h) {
-  return chart.exportUrl + '?bbox=' + bbox.map(v => v.toFixed(1)).join(',') +
-    '&bboxSR=3857&imageSR=3857&size=' + w + ',' + h + '&format=jpg&f=image' +
-    '&renderingRule=' + encodeURIComponent(JSON.stringify({ rasterFunction: chart.rendering }));
-}
 
 function chartLayerKey() {
   return CHART_LAYERS[state && state.settings.chartLayer] ? state.settings.chartLayer : 'sectional';
 }
 
-// One tile of a chart layer: the map server's own tile, or for an image
-// server the picture of that tile's box.
+// One tile of a chart layer.
 function chartTileUrl(layer, z, x, y) {
-  const chart = CHART_LAYERS[layer];
-  if (chart.exportUrl) {
-    const size = 2 * EARTH_HALF / Math.pow(2, z);
-    const minX = -EARTH_HALF + x * size;
-    const maxY = EARTH_HALF - y * size;
-    return chartExportUrl(chart, [minX, maxY - size, minX + size, maxY], 256, 256);
-  }
-  return chart.url.replace('{z}', z).replace('{y}', y).replace('{x}', x);
+  return CHART_LAYERS[layer].url.replace('{z}', z).replace('{y}', y).replace('{x}', x);
 }
 
 /* ---------- maps saved for offline use ----------
@@ -1168,6 +1153,12 @@ async function loadSavedMapAreas() {
   try {
     const db = await openMapDb();
     if (!db) return;
+    // Terrain was USGS 3DEP relief before 1.35.0; its saved tiles go, so the new map is saved fresh.
+    if (!localStorage.getItem('mission-log-terrain-v2')) {
+      const old = await idbReq(db.transaction('areas').objectStore('areas').getAll());
+      await mapTx(['areas'], 'readwrite', areas => old.filter(a => a.layer === 'terrain').forEach(a => areas.delete(areaKey(a.sortieId, a.layer))));
+      try { localStorage.setItem('mission-log-terrain-v2', '1'); } catch (_) { /* ignore */ }
+    }
     const list = await idbReq(db.transaction('areas').objectStore('areas').getAll());
     savedMapAreas = {};
     const orphans = [];
@@ -1271,8 +1262,7 @@ async function saveOfflineMap(log, layer) {
       if (Date.now() - lastPaint > 250) { lastPaint = Date.now(); renderOfflineMapsCard(); }
     }
   };
-  // the terrain server draws each tile to order; ask it more gently
-  await Promise.all(Array.from({ length: layer === 'terrain' ? 3 : 6 }, worker));
+  await Promise.all(Array.from({ length: 6 }, worker));
   mapSaveJob = null;
 
   if (abort.signal.aborted) {
@@ -4446,22 +4436,10 @@ async function renderChartImage(view, W, H, layer) {
   for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + W - 1) / 256); tx++) {
     for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + H - 1) / 256); ty++) tiles.push([tx, ty]);
   }
-  let drawn = 0;
-  if (chart.exportUrl && navigator.onLine !== false) {
-    // one picture of the whole page from the image server
-    const res = 2 * EARTH_HALF / (256 * Math.pow(2, view.zoom));
-    try {
-      const img = await loadImage(chartExportUrl(chart, [x0 * res - EARTH_HALF, EARTH_HALF - (y0 + H) * res, (x0 + W) * res - EARTH_HALF, EARTH_HALF - y0 * res], W, H), true);
-      ctx.drawImage(img, 0, 0, W, H);
-      drawn++;
-    } catch (_) { /* no signal: build it from tiles below */ }
-  }
-  if (!drawn) {
-    const n = Math.pow(2, view.zoom);
-    const results = await Promise.all(tiles.map(([tx, ty]) => drawChartTile(ctx, layer, view.zoom, ((tx % n) + n) % n, ty,
-      Math.round(tx * 256 - x0), Math.round(ty * 256 - y0), 256)));
-    drawn = results.filter(Boolean).length;
-  }
+  const n = Math.pow(2, view.zoom);
+  const results = await Promise.all(tiles.map(([tx, ty]) => drawChartTile(ctx, layer, view.zoom, ((tx % n) + n) % n, ty,
+    Math.round(tx * 256 - x0), Math.round(ty * 256 - y0), 256)));
+  const drawn = results.filter(Boolean).length;
   if (!drawn) throw new Error('no chart tiles');
   if (view.box) {
     const a = mercatorPx(view.box.north, view.box.west, view.zoom);
@@ -4495,10 +4473,73 @@ let mapSketch = null;            // the open map page: { map, page, layer, strok
 let mapSketchTool = 'pan';       // pan, pen, eraser (what a finger does)
 let mapSketchColor = '#d81b60';
 
-// A map page that is drawn on live: a chart background, and no older picture-ink
-// (PencilKit ink on a map page is kept with its map region).
+// A page on the zoomable canvas: every page except an older fixed-size one
+// already drawn on (picture ink, or PencilKit ink without a map region). Its
+// background is a layer under the drawing: a chart, graph paper or white, and
+// changing it keeps the drawing where it is.
 function isMapSketchPage(page) {
-  return !!CHART_LAYERS[page.bg] && !page.ink && !page.inkBase && (!page.pk || !!page.region);
+  return page.bg !== 'image' && !page.ink && !page.inkBase && (!page.pk || !!page.region);
+}
+
+// Graph paper that goes on forever: 32-pixel squares with every fourth line
+// darker, the same size on screen at every zoom.
+const PaperGridLayer = window.L ? L.GridLayer.extend({
+  createTile() {
+    const tile = document.createElement('canvas');
+    const size = this.getTileSize();
+    tile.width = size.x;
+    tile.height = size.y;
+    paintPaperGrid(tile.getContext('2d'), 0, 0, size.x, size.y, 0, 0);
+    return tile;
+  }
+}) : null;
+
+// Grid lines into a box, for a view whose top-left world pixel is (x0, y0).
+function paintPaperGrid(ctx, dx, dy, w, h, x0, y0) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(dx, dy, w, h);
+  const step = 32;
+  for (let x = Math.ceil(x0 / step) * step; x <= x0 + w; x += step) {
+    ctx.fillStyle = Math.round(x / step) % 4 === 0 ? '#c9d9e6' : '#e4edf4';
+    ctx.fillRect(dx + Math.round(x - x0), dy, 1, h);
+  }
+  for (let y = Math.ceil(y0 / step) * step; y <= y0 + h; y += step) {
+    ctx.fillStyle = Math.round(y / step) % 4 === 0 ? '#c9d9e6' : '#e4edf4';
+    ctx.fillRect(dx, dy + Math.round(y - y0), w, 1);
+  }
+}
+
+// The page's background as a map layer: a chart, the grid, or none (plain white).
+function sketchBaseLayer(map, page) {
+  map.getContainer().style.background = CHART_LAYERS[page.bg] ? '#e8edf1' : '#ffffff';
+  if (CHART_LAYERS[page.bg]) return chartTileLayer(page.bg).addTo(map);
+  if (page.bg === 'grid') return new PaperGridLayer({ tileSize: 256 }).addTo(map);
+  return null;
+}
+
+// The search area and the ForeFlight plan, on the charts only.
+function sketchMapOverlays(map, page, log) {
+  if (!CHART_LAYERS[page.bg]) return;
+  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)]);
+  if (corners.every(([a, b]) => a != null && b != null)) {
+    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.06, dashArray: '6 4', interactive: false }).addTo(map);
+  }
+  if (log.fpl && log.fpl.points.length > 1) {
+    L.polyline(log.fpl.points.map(p => [p[0], p[1]]), { color: '#0a47c2', weight: 3, dashArray: '10 6', opacity: 0.8, interactive: false }).addTo(map);
+  }
+}
+
+// The background as a picture W × H at a whole tile zoom, for the page's PDF picture.
+async function renderSketchBackground(view, W, H, bg) {
+  if (CHART_LAYERS[bg]) return renderChartImage(view, W, H, bg);
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const centre = mercatorPx(view.lat, view.lon, view.zoom);
+  if (bg === 'grid') paintPaperGrid(ctx, 0, 0, W, H, centre.x - W / 2, centre.y - H / 2);
+  else { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H); }
+  return canvas.toDataURL('image/jpeg', 0.9);
 }
 
 function normalizeStrokes(raw) {
@@ -4518,10 +4559,11 @@ function strokeWeight(stroke, zoom) {
 }
 
 function closeMapSketch() {
-  if (!mapSketch) return;
-  clearTimeout(mapSketch.snapTimer);
-  mapSketch.map.remove();
+  const ms = mapSketch;
+  if (!ms) return;
   mapSketch = null;
+  clearTimeout(ms.snapTimer);
+  ms.map.remove();
 }
 
 function setupMapSketch(page) {
@@ -4535,17 +4577,13 @@ function setupMapSketch(page) {
     const view = sketchMapView(log, w, h, page.bg);
     return view ? { lat: view.lat, lon: view.lon, zoom: view.zoom } : { lat: 39.5, lon: -98.35, zoom: 5 };
   })();
-  const map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 15, zoomSnap: 1, tap: false })
+  const map = L.map(el, { zoomControl: false, attributionControl: !!CHART_LAYERS[page.bg], minZoom: 5, maxZoom: 15, zoomSnap: 1, tap: false })
     .setView([start.lat, start.lon], start.zoom);
-  const tiles = chartTileLayer(page.bg).addTo(map);
+  // keep where it opened, so changing the background redraws the same view
+  if (!page.map) page.map = { lat: start.lat, lon: start.lon, zoom: start.zoom };
+  const tiles = sketchBaseLayer(map, page);
   // the search area and the ForeFlight plan, for bearings
-  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)]);
-  if (corners.every(([a, b]) => a != null && b != null)) {
-    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.06, dashArray: '6 4', interactive: false }).addTo(map);
-  }
-  if (log.fpl && log.fpl.points.length > 1) {
-    L.polyline(log.fpl.points.map(p => [p[0], p[1]]), { color: '#0a47c2', weight: 3, dashArray: '10 6', opacity: 0.8, interactive: false }).addTo(map);
-  }
+  sketchMapOverlays(map, page, log);
   const renderer = L.canvas({ padding: 0.5 });
   const group = L.layerGroup().addTo(map);
   const ms = mapSketch = { map, page, tiles, group, renderer, lines: [], undo: [], snapTimer: null };
@@ -4687,7 +4725,7 @@ function setupMapSketch(page) {
     },
     zoom(step) { if (step > 0) map.zoomIn(); else map.zoomOut(); }
   };
-  setTimeout(() => map.invalidateSize(), 60);
+  setTimeout(() => { if (mapSketch === ms) map.invalidateSize(); }, 60);
   if (!page.image) scheduleSnapshot();
 }
 
@@ -4710,8 +4748,8 @@ async function snapshotMapSketch(ms) {
     east: Math.max(...corners.map(q => q[1])), west: Math.min(...corners.map(q => q[1]))
   } : null;
   const view = { lat: c.lat, lon: c.lng, zoom, box };
-  const img = await loadImg(await renderChartImage(view, sw, sh, page.bg));
-  if (!img) return;
+  const img = await loadImg(await renderSketchBackground(view, sw, sh, page.bg));
+  if (!img || mapSketch !== ms) return;   // the page closed while the chart loaded
   const screen = document.createElement('canvas');
   screen.width = sw;
   screen.height = sh;
@@ -4780,16 +4818,19 @@ let nativeMapSketch = null;   // { map, page, region } while a map page shows in
 if (NATIVE) {
   Native.MissionLog.addListener('sketchViewport', v => {
     const nm = nativeMapSketch;
-    if (!nm || v.pageId !== nm.page.id) return;
+    if (!nm || v.pageId !== nm.page.id || !nm.map.getContainer().isConnected) return;
     const at = viewportToMap(nm.region, v);
-    nm.map.setView([at.lat, at.lon], at.zoom, { animate: false });
+    try { nm.map.setView([at.lat, at.lon], at.zoom, { animate: false }); } catch (err) { console.warn('[sketch] map follow', err); }
   });
 }
 
+// Drop the map, and everything that could still reach it after a redraw.
 function closeNativeMapSketch() {
-  if (!nativeMapSketch) return;
-  nativeMapSketch.map.remove();
+  const nm = nativeMapSketch;
+  if (!nm) return;
   nativeMapSketch = null;
+  if (nm.observer) nm.observer.disconnect();
+  nm.map.remove();
 }
 
 function setupNativeMapSketch(page) {
@@ -4808,24 +4849,20 @@ function setupNativeMapSketch(page) {
     return view ? { lat: view.lat, lon: view.lon, zoom: view.zoom } : { lat: 39.5, lon: -98.35, zoom: 7 };
   })();
   const region = mapRegionFor(page, start.lat, start.lon);
+  if (!page.map) page.map = { lat: start.lat, lon: start.lon, zoom: start.zoom };
   // the map only shows: the canvas over it takes the fingers
   const map = L.map(el, {
-    zoomControl: false, attributionControl: true, zoomSnap: 0, minZoom: 3, maxZoom: 16,
+    zoomControl: false, attributionControl: !!CHART_LAYERS[page.bg], zoomSnap: 0, minZoom: 3, maxZoom: 16,
     dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, tap: false
   }).setView([start.lat, start.lon], start.zoom);
-  chartTileLayer(page.bg).addTo(map);
-  const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)]);
-  if (corners.every(([a, b]) => a != null && b != null)) {
-    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.06, dashArray: '6 4', interactive: false }).addTo(map);
-  }
-  if (log.fpl && log.fpl.points.length > 1) {
-    L.polyline(log.fpl.points.map(p => [p[0], p[1]]), { color: '#0a47c2', weight: 3, dashArray: '10 6', opacity: 0.8, interactive: false }).addTo(map);
-  }
+  sketchBaseLayer(map, page);
+  sketchMapOverlays(map, page, log);
   // lines drawn on this page in a browser stay visible under the PencilKit ink
   const renderer = L.canvas({ padding: 0.5 });
   const lines = page.strokes.map(stroke => L.polyline(stroke.p, { color: stroke.c, weight: strokeWeight(stroke, start.zoom), lineCap: 'round', renderer, interactive: false }).addTo(map));
   map.on('zoom', () => lines.forEach((line, i) => line.setStyle({ weight: strokeWeight(page.strokes[i], map.getZoom()) })));
-  nativeMapSketch = { map, page, region };
+  const nm = nativeMapSketch = { map, page, region, observer: null };
+  const current = () => nativeMapSketch === nm;
 
   const rect = sketchRect();
   if (!rect || rect.width < 10 || rect.height < 10) { console.warn('[sketch] map page has no size yet'); return; }
@@ -4840,10 +4877,13 @@ function setupNativeMapSketch(page) {
     if ($('#overlay').classList.contains('show')) nativeSketchVisible(false);
   }).catch(err => console.warn('sketch', err));
   if (window.ResizeObserver) {
-    new ResizeObserver(() => {
+    nm.observer = new ResizeObserver(() => {
       const r = sketchRect();
-      if (r && nativeSketchOn && activeTab === 'sketch') { Native.MissionLog.sketchFrame(r).catch(() => {}); map.invalidateSize(); }
-    }).observe(el);
+      if (!current() || !r || !nativeSketchOn || activeTab !== 'sketch') return;
+      Native.MissionLog.sketchFrame(r).catch(() => {});
+      map.invalidateSize();
+    });
+    nm.observer.observe(el);
   }
   sketchCtl = {
     native: true,
@@ -4862,7 +4902,7 @@ function setupNativeMapSketch(page) {
     },
     flush() {}
   };
-  setTimeout(() => map.invalidateSize(), 60);
+  setTimeout(() => { if (current()) map.invalidateSize(); }, 60);
 }
 
 // A map page changed in the app (a stroke, or the map settled somewhere new):
@@ -4877,7 +4917,7 @@ async function applyNativeMapSketch(data) {
   const vw = Math.round(v.width);
   const vh = Math.round(v.height);
   // the chart at the nearest tile zoom, scaled to the fractional zoom on screen
-  const tz = Math.max(5, Math.min(CHART_LAYERS[page.bg].maxNative || 15, Math.round(at.zoom)));
+  const tz = Math.max(3, Math.min((CHART_LAYERS[page.bg] || {}).maxNative || 16, Math.round(at.zoom)));
   const k = Math.pow(2, tz - at.zoom);
   const log = state.logs.find(l => l.sketches.includes(page));
   const corners = SAR_CORNERS.map(([key]) => [parseLat(log.sar.corners[key].lat), parseLon(log.sar.corners[key].lon)])
@@ -4887,7 +4927,7 @@ async function applyNativeMapSketch(data) {
     east: Math.max(...corners.map(q => q[1])), west: Math.min(...corners.map(q => q[1]))
   } : null;
   let chart = null;
-  try { chart = await loadImg(await renderChartImage({ lat: at.lat, lon: at.lon, zoom: tz, box }, Math.round(vw * k), Math.round(vh * k), page.bg)); } catch (_) { /* offline and not saved */ }
+  try { chart = await loadImg(await renderSketchBackground({ lat: at.lat, lon: at.lon, zoom: tz, box: CHART_LAYERS[page.bg] ? box : null }, Math.round(vw * k), Math.round(vh * k), page.bg)); } catch (_) { /* offline and not saved */ }
   const ink = await loadImg(data.ink);
   const screen = document.createElement('canvas');
   screen.width = vw;
@@ -5255,35 +5295,29 @@ function setupSketch() {
   updateToolbarState();
 }
 
-/* A page is paper (grid, plain) or a map (sectional, topographic, terrain).
-   An empty page changes kind; one already drawn on keeps it, and the other
-   kind starts a new page. Between maps, a map page just changes chart. */
+/* The background is a layer under the drawing: on a canvas page, switching
+   between Grid, Plain, Sectional, Topo and Terrain keeps the drawing where it
+   is. An older fixed-size page already drawn on can switch between grid and
+   plain; a map for it starts a new page. */
 function setSketchBackground(bg) {
   const log = activeSortie();
   if (!log) return;
   if (sketchCtl) sketchCtl.flush();
   const { page } = currentSketchPage(log);
-  const toMap = !!CHART_LAYERS[bg];
-  const isMap = isMapSketchPage(page);
   if (page.bg === bg) return;
-  const drawn = isMap ? page.strokes.length > 0 || !!page.pk : !sketchPageBlank(page) || page.bg === 'image';
-  if (toMap && isMap) {
+  if (isMapSketchPage(page)) {
     page.bg = bg;
     page.image = '';
-  } else if (drawn) {
-    const fresh = blankSketchPage(bg);
-    if (toMap && isMap === false && page.map) fresh.map = page.map;
-    log.sketches.push(fresh);
-    sketchPageIndex[log.id] = log.sketches.length - 1;
-    toast('Started page ' + log.sketches.length + ' with the ' + (toMap ? CHART_LAYERS[bg].label.toLowerCase() + ' map' : bg === 'plain' ? 'plain paper' : 'grid') + ' · this page kept its drawing');
-  } else {
+  } else if (!CHART_LAYERS[bg] && page.bg !== 'image') {
     page.bg = bg;
     page.bgImage = '';
-    page.image = '';
-    page.strokes = [];
-    page.pk = '';
-    page.region = null;
-    if (!toMap) page.map = null;
+    page.map = null;
+    page.reflatten = true;
+  } else {
+    const fresh = blankSketchPage(bg);
+    log.sketches.push(fresh);
+    sketchPageIndex[log.id] = log.sketches.length - 1;
+    toast('This page was drawn before backgrounds could change under a drawing · started page ' + log.sketches.length + ' for the ' + CHART_LAYERS[bg].label.toLowerCase() + ' map');
   }
   save();
   if (activeTab === 'sketch') render();
@@ -8449,7 +8483,7 @@ const actions = {
     if (sketchCtl) sketchCtl.flush();
     const { page } = currentSketchPage(log);
     // a new page keeps the kind of this one: the same paper, or the same map where it is now
-    const fresh = blankSketchPage(isMapSketchPage(page) ? page.bg : page.bg === 'plain' ? 'plain' : 'grid');
+    const fresh = blankSketchPage(page.bg === 'image' ? 'grid' : page.bg);
     if (isMapSketchPage(page) && page.map) fresh.map = Object.assign({}, page.map);   // its own region is made there
     log.sketches.push(fresh);
     sketchPageIndex[log.id] = log.sketches.length - 1;
