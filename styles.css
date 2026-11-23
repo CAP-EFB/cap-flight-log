@@ -1232,8 +1232,7 @@ a.menu-item { text-decoration: none; }
 .sortie-switch[hidden] { display: none; }
 .card-current { border-color: var(--blue); box-shadow: 0 0 0 2px var(--focus); }
 /* sortie tabs stay shut until the mission has a sortie */
-.tabbar.locked .tab:not([data-tab="plan"]):not([data-tab="logbook"]) { opacity: .38; }
-.tabbar.no-mission .tab[data-tab="plan"] { opacity: .38; }
+.tabbar.locked .tab:not([data-tab="logbook"]) { opacity: .38; }
 .logbook-mission.current { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
 
 .back-link {
@@ -1601,6 +1600,7 @@ html.pos-open, html.pos-open body { overflow: hidden; }
 
   .p-cols { display: grid; grid-template-columns: 1.15fr .85fr; gap: 10pt; }
   .p-times td { padding: 2.4pt 4pt; }
+  .p-wmirs .lbl { font-weight: 700; width: 24%; vertical-align: top; }
   .p-times .lbl { font-weight: 700; width: 30%; }
   .p-times .t { width: 18%; text-align: center; font-family: "SF Mono", Menlo, Consolas, monospace; }
   .p-times .h { width: 22%; text-align: center; font-family: "SF Mono", Menlo, Consolas, monospace; }
@@ -1683,3 +1683,16 @@ body.keyboard-open .fab { display: none; }
 
 .active-mission-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 10px; }
 .active-mission-number { font-size: 24px; font-weight: 750; letter-spacing: .01em; }
+
+/* WMIRS fields: long text boxes with WMIRS's character limit, closed missions */
+.text-field + .text-field { margin-top: 12px; }
+.text-field > span { display: flex; justify-content: space-between; gap: 8px; }
+.char-count { font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.char-count.full { color: var(--red, #b3261e); }
+.mission-closed {
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px; vertical-align: middle;
+  background: var(--surface-2, rgba(127,127,127,.15)); color: var(--muted); font-size: 11px; font-weight: 700;
+  letter-spacing: .02em;
+}
+.check-row { display: flex; align-items: center; gap: 10px; font-weight: 600; margin: 2px 0 12px; }
+.check-row input { width: 22px; height: 22px; }

@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.21.4';
+const APP_VERSION = '1.22.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -466,7 +466,7 @@ function trackGPX(log) {
   const time = ms => new Date(ms).toISOString();
   const pts = log.track.map(p => `      <trkpt lat="${p[1].toFixed(6)}" lon="${p[2].toFixed(6)}">` +
     (p[3] > -9000 ? `<ele>${p[3].toFixed(1)}</ele>` : '') + `<time>${time(p[0])}</time></trkpt>`).join('\n');
-  const name = (log.mission || 'Mission') + ' sortie ' + (log.sortie || '');
+  const name = (missionOf(log).number || 'Mission') + ' sortie ' + (log.sortie || '');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Mission Log" xmlns="http://www.topografix.com/GPX/1/1">
   <trk>
@@ -527,7 +527,7 @@ function syncSortieActivity() {
   const airborne = t.wheelsUp.time && !t.wheelsDown.time ? utcDateNear(t.wheelsUp.time) : null;
   const ops = opsReminderDue(log);
   Native.MissionLog.updateSortieActivity({
-    mission: log.mission || '',
+    mission: missionOf(log).number || '',
     sortie: sortieLabel(log, missionSorties(log).indexOf(log)),
     callsign: log.callsign || '',
     phase: sortiePhase(t),
@@ -1194,7 +1194,6 @@ function blankSar() {
   SAR_CORNERS.forEach(([key]) => { corners[key] = { lat: '', lon: '' }; });
   return {
     tracking: '',
-    missionDate: '',
     reporter: '',
     reporterCapid: '',
     areaName: '',
@@ -1216,6 +1215,7 @@ function normalizeSar(raw) {
   const planned = sar.planned;
   const actual = sar.actual;
   Object.assign(sar, raw);
+  delete sar.missionDate;   // the mission date lives on the mission since 1.22.0
   sar.corners = corners;
   SAR_CORNERS.forEach(([key]) => { Object.assign(corners[key], (raw.corners && raw.corners[key]) || {}); });
   sar.planned = Object.assign(planned, raw.planned || {});
@@ -1245,8 +1245,8 @@ function sarReport(log) {
   return {
     meta: [
       ['Tracking number', sar.tracking || log.sortie],
-      ['Mission number', log.mission],
-      ['Mission date', sar.missionDate],
+      ['Mission number', missionOf(log).number],
+      ['Mission date', missionOf(log).date],
       ['Reporting MO / MP / MS', [sar.reporter, sar.reporterCapid ? 'CAPID ' + sar.reporterCapid : ''].filter(Boolean).join(' - ')],
       ['Search area name', sar.areaName],
       ['Grid', log.grid],
@@ -1260,11 +1260,35 @@ function sarReport(log) {
   };
 }
 
+/* The WMIRS brief and debrief fields, as label/value rows for the PDF and the
+   printout. Empty ones are left out. */
+function wmirsReport(log) {
+  const d = log.debrief;
+  const money = value => (String(value || '').trim() ? '$' + String(value).trim().replace(/^\$/, '') : '');
+  const reason = d.reason === 'Other' ? d.reasonOther || 'Other' : [d.reason, d.reasonOther].filter(Boolean).join(' - ');
+  return [
+    ['Sortie objectives', log.objectives],
+    ['Sortie deliverables', log.deliverables],
+    ['Route of flight', log.route],
+    ['Flight plan closed', d.flightPlanClosed ? 'Yes' : ''],
+    ['Fuel used (gal)', d.fuelGal],
+    ['Oil used (qt)', d.oilQt],
+    ['Fuel & oil cost', money(d.fuelCost)],
+    ['Receipt #', d.receipt],
+    ['Summary', d.summary],
+    ['Results/Deliverables', d.results],
+    ['Weather conditions', d.weather],
+    ['Remarks', d.remarks],
+    ['Sortie effectiveness', [d.effectiveness, d.effectiveness && d.effectiveness !== 'Successful' ? reason : ''].filter(Boolean).join(' - ')]
+  ].map(([label, value]) => [label, String(value || '').trim()]).filter(([, value]) => value);
+}
+
 /* ---------- crew ----------
    A sortie's crew is a list, so it can hold more than one observer, scanner or
    photographer. Roles as CAP writes them: mission pilot, observer, scanner,
    airborne photographer. */
-const CREW_ROLES = [['MP', 'Mission pilot'], ['MO', 'Mission observer'], ['MS', 'Mission scanner'], ['AP', 'Airborne photographer']];
+const CREW_ROLES = [['MP', 'Mission pilot'], ['MO', 'Mission observer'], ['MS', 'Mission scanner'],
+  ['AP', 'Airborne photographer'], ['RO', 'Radio operator'], ['PAX', 'Passenger']];
 const CREW_ROLE_KEYS = CREW_ROLES.map(([key]) => key);
 
 function crewMember(role) {
@@ -1309,20 +1333,88 @@ function crewInOrder(log) {
   return CREW_ROLE_KEYS.flatMap(role => log.crew.filter(m => m.role === role));
 }
 
-function blankLog() {
+/* ---------- missions and sorties ----------
+   As in WMIRS: a mission (number, name, symbol) holds air sorties. Missions are
+   their own records in state.missions; each sortie in state.logs points at its
+   mission by missionId. */
+
+// WMIRS Air Sortie Add/Edit → Sortie Type
+const SORTIE_TYPES = ['ADIS Sortie', 'Airborne Photography', 'CD Evaluation', 'CD Training', 'Communication Relay',
+  'DR Evaluation', 'DR Training', 'DF ELT', 'Impact Assessment', 'Relocation', 'Airborne Recon', 'SAR Evaluation',
+  'SAR Training', 'Training/Evaluation', 'Crew Transportation'];
+// WMIRS Air Sortie Debrief
+const SORTIE_EFFECTIVENESS = ['Successful', 'Marginal', 'Unsuccessful', 'Not Flown', 'Not Required'];
+const NOT_SUCCESSFUL_REASONS = ['Weather', 'Aircraft Maintenance', 'Equipment Failure', 'Crew Unavailable', 'Customer Cancellation', 'Other'];
+// The debrief narrative, with the character limits WMIRS puts on each box.
+const DEBRIEF_TEXT = [
+  ['summary', 'Summary', 500],
+  ['results', 'Results/Deliverables', 800],
+  ['weather', 'Weather Conditions', 200],
+  ['remarks', 'Remarks', 400]
+];
+
+function blankMission() {
   return {
     id: uid(),
-    missionId: uid(),
-    missionCreated: false,   // step 1: the mission exists
-    started: false,          // step 2: this record is a sortie, not just the new mission's placeholder
+    number: '',    // WMIRS Mission No., e.g. 27-T-3852
+    name: '',      // Mission Name
+    symbol: '',    // Mission Symbol, e.g. A31
+    date: '',      // DD MMM YY, as on the CAPF 104a
+    base: '',
+    closed: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+}
+
+function normalizeMission(raw) {
+  const mission = blankMission();
+  if (!raw || typeof raw !== 'object') return mission;
+  ['id', 'number', 'name', 'symbol', 'date', 'base'].forEach(key => {
+    if (raw[key] != null && raw[key] !== '') mission[key] = String(raw[key]);
+  });
+  mission.closed = raw.closed === true;
+  mission.createdAt = Number(raw.createdAt) || mission.createdAt;
+  mission.updatedAt = Number(raw.updatedAt) || mission.updatedAt;
+  return mission;
+}
+
+function blankDebrief() {
+  return {
+    flightPlanClosed: false,
+    fuelGal: '',
+    oilQt: '',
+    fuelCost: '',
+    receipt: '',
+    summary: '',
+    results: '',
+    weather: '',
+    remarks: '',
+    effectiveness: '',
+    reason: '',
+    reasonOther: ''
+  };
+}
+
+function blankRadio() {
+  return { main: '', guard: '', airGround: '', airAir: '', baseCallsign: '', baseFreq: '', atis: '', ctaf: '', unicom: '', other: '' };
+}
+
+function blankLog(missionId) {
+  return {
+    id: uid(),
+    missionId: missionId || '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    mission: '',
-    sortie: '',
-    aircraft: '',
+    sortie: '',        // WMIRS Sortie No., e.g. A0009
+    sortieType: '',    // one of SORTIE_TYPES
+    aircraft: '',      // Tail No.
     callsign: '',
-    base: '',
-    capFlight: '',
+    depAirport: '',
+    destAirport: '',
+    objectives: '',    // from the WMIRS brief
+    deliverables: '',
+    route: '',
     sectional: '',
     grid: '',
     altitude: '',
@@ -1330,7 +1422,7 @@ function blankLog() {
     entry: { lat: '', lon: '' },
     exit: { lat: '', lon: '' },
     crew: [crewMember('MP'), crewMember('MO'), crewMember('MS')],
-    radio: { main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' },
+    radio: blankRadio(),
     navAids: [
       { ident: '', freq: '', radial: '' },
       { ident: '', freq: '', radial: '' },
@@ -1343,6 +1435,7 @@ function blankLog() {
     sketch: '',
     observations: [],
     signoff: { name: '', capid: '', dateTime: '', signature: '' },
+    debrief: blankDebrief(),
     sar: blankSar(),
     // flight track: [time ms, lat, lon, altitude m, accuracy m, speed m/s, course °]
     track: []
@@ -1350,11 +1443,11 @@ function blankLog() {
 }
 
 function newState() {
-  const log = blankLog();
   return {
-    version: 1,
+    version: 2,
     savedAt: 0,
-    activeId: log.id,
+    activeMissionId: '',
+    activeId: '',      // the open sortie; '' while none is
     settings: {
       theme: 'auto',
       fingerDraw: true,
@@ -1368,7 +1461,8 @@ function newState() {
       termsAccepted: 0,
       termsAcceptedAt: 0
     },
-    logs: [log]
+    missions: [],
+    logs: []
   };
 }
 
@@ -1376,14 +1470,24 @@ function normalizeLog(raw) {
   const base = blankLog();
   const log = Object.assign(base, raw || {});
   log.id = (raw && raw.id) || base.id;
-  log.missionId = (raw && raw.missionId) || '';   // filled in by assignMissionIds
+  log.missionId = (raw && raw.missionId) || '';
   log.receivedFrom = (raw && raw.receivedFrom) || '';
-  // Logs from before 1.13.0 have neither flag: anything with a mission number or
-  // something logged was already a created mission and a started sortie.
-  const hasData = !!(String(log.mission || '').trim() || log.entries.length || log.observations.length ||
-    (log.times.engineStart && log.times.engineStart.time));
-  log.missionCreated = raw && typeof raw.missionCreated === 'boolean' ? raw.missionCreated : hasData;
-  log.started = raw && typeof raw.started === 'boolean' ? raw.started : hasData;
+  // Mission fields were copied onto every sortie before 1.22.0; they now live on
+  // the mission (see splitLegacyLogs).
+  delete log.mission;
+  delete log.base;
+  delete log.missionCreated;
+  delete log.started;
+  // "CAP flight" became the WMIRS Sortie Type in 1.22.0. Keep anything else
+  // that was typed there in the notes rather than lose it.
+  if (raw && raw.capFlight && !log.sortieType) {
+    const type = SORTIE_TYPES.find(t => t.toLowerCase() === String(raw.capFlight).trim().toLowerCase());
+    if (type) log.sortieType = type;
+    else log.notes = ('CAP flight: ' + String(raw.capFlight).trim() + (log.notes ? '\n' + log.notes : ''));
+  }
+  delete log.capFlight;
+  log.debrief = Object.assign(blankDebrief(), (raw && raw.debrief) || {});
+  log.debrief.flightPlanClosed = log.debrief.flightPlanClosed === true;
   log.times = Object.assign(emptyTimes(), (raw && raw.times) || {});
   TIME_DEFS.forEach(def => {
     log.times[def.key] = Object.assign({ time: '', hobbs: '' }, log.times[def.key] || {});
@@ -1391,7 +1495,7 @@ function normalizeLog(raw) {
   log.entry = Object.assign({ lat: '', lon: '' }, (raw && raw.entry) || {});
   log.exit = Object.assign({ lat: '', lon: '' }, (raw && raw.exit) || {});
   log.crew = normalizeCrew(raw && raw.crew);
-  log.radio = Object.assign({ main: '', guard: '', atis: '', ctaf: '', unicom: '', other: '' }, (raw && raw.radio) || {});
+  log.radio = Object.assign(blankRadio(), (raw && raw.radio) || {});
   log.signoff = Object.assign({ name: '', capid: '', dateTime: '', signature: '' }, (raw && raw.signoff) || {});
   log.sar = normalizeSar(raw && raw.sar);
   log.track = Array.isArray(raw && raw.track) ? raw.track.filter(p => Array.isArray(p) && p.length >= 3) : [];
@@ -1426,37 +1530,119 @@ function normalizeLog(raw) {
   return log;
 }
 
+/* Before 1.22.0 there were no mission records: each log carried its mission's
+   number, base and date, a new mission was a placeholder log (started: false),
+   and missionCreated / started said which step it was at. Turn such logs into
+   missions and sorties. Used for saved state and for older backup files. */
+function splitLegacyLogs(rawLogs) {
+  const logs = (rawLogs || []).filter(raw => raw && typeof raw === 'object').map(raw => Object.assign({}, raw));
+  assignMissionIds(logs);
+  const missions = [];
+  const sorties = [];
+  logs.forEach(raw => {
+    const number = String(raw.mission || '').trim().toUpperCase();
+    const logged = !!((Array.isArray(raw.entries) && raw.entries.length) ||
+      (Array.isArray(raw.observations) && raw.observations.length) ||
+      (raw.times && raw.times.engineStart && raw.times.engineStart.time));
+    // Logs from before 1.13.0 have neither flag: a mission number or anything
+    // logged meant a created mission and a started sortie.
+    const created = typeof raw.missionCreated === 'boolean' ? raw.missionCreated : !!number || logged;
+    const started = typeof raw.started === 'boolean' ? raw.started : !!number || logged;
+    const date = String((raw.sar && raw.sar.missionDate) || '');
+    let mission = missions.find(m => m.id === raw.missionId);
+    if (!mission && (created || started || logged)) {
+      mission = normalizeMission({ id: raw.missionId, number, date, base: raw.base, createdAt: raw.createdAt });
+      missions.push(mission);
+    } else if (mission) {
+      if (!mission.number) mission.number = number;
+      if (!mission.date) mission.date = date;
+      if (!mission.base && raw.base) mission.base = String(raw.base);
+      if (raw.createdAt && raw.createdAt < mission.createdAt) mission.createdAt = raw.createdAt;
+    }
+    // a placeholder with nothing logged was only the mission
+    if (mission && (started || logged)) sorties.push(raw);
+  });
+  return { missions, logs: sorties };
+}
+
 function normalizeState(raw) {
   const fresh = newState();
-  if (!raw || !Array.isArray(raw.logs) || !raw.logs.length) return fresh;
+  if (!raw || !Array.isArray(raw.logs)) return fresh;
+  let missions;
+  let rawLogs;
+  if (Array.isArray(raw.missions)) {
+    missions = raw.missions.filter(m => m && typeof m === 'object').map(normalizeMission);
+    rawLogs = raw.logs;
+  } else {
+    ({ missions, logs: rawLogs } = splitLegacyLogs(raw.logs));
+  }
   const normalized = {
-    version: 1,
+    version: 2,
     savedAt: raw.savedAt || 0,
-    activeId: raw.activeId,
+    activeMissionId: '',
+    activeId: '',
     settings: Object.assign(fresh.settings, raw.settings || {}),
-    logs: raw.logs.map(normalizeLog)
+    missions,
+    logs: rawLogs.map(normalizeLog)
   };
-  assignMissionIds(normalized.logs);
+  // A sortie whose mission is missing gets one, so it can still be found.
+  normalized.logs.forEach(log => {
+    if (missions.some(m => m.id === log.missionId)) return;
+    const mission = blankMission();
+    if (log.missionId) mission.id = log.missionId;
+    else log.missionId = mission.id;
+    missions.push(mission);
+  });
+  const activeLogRaw = normalized.logs.find(l => l.id === raw.activeId);
+  const activeMissionId = missions.some(m => m.id === raw.activeMissionId) ? raw.activeMissionId
+    : activeLogRaw ? activeLogRaw.missionId
+      : (missions.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || {}).id || '';
+  normalized.activeMissionId = activeMissionId;
+  normalized.activeId = activeLogRaw && activeLogRaw.missionId === activeMissionId ? activeLogRaw.id : '';
   // Finger became the sketch default in 1.3.8. State saved before that carries
   // the old Pencil default, indistinguishable from a choice, so switch it once.
   if (!raw.settings || !raw.settings.fingerDefaultSet) normalized.settings.fingerDraw = true;
   delete normalized.settings.coordFormat;   // the format choice was removed in 1.4.3
   delete normalized.settings.introDismissed; // the intro card was removed in 1.7.3
   delete normalized.settings.gpsAuto;        // replaced by live GPS in 1.8.0
-  if (!normalized.logs.some(l => l.id === normalized.activeId)) {
-    normalized.activeId = normalized.logs[0].id;
-  }
   return normalized;
 }
 
+function missionById(id) {
+  return (state && id && state.missions.find(m => m.id === id)) || null;
+}
+
+// The mission picked on Missions, or null.
+function activeMission() {
+  return state ? missionById(state.activeMissionId) : null;
+}
+
+let emptyMission = null;
+
+// A sortie's mission. Never null, so templates can read its fields.
+function missionOf(log) {
+  const mission = missionById(log && log.missionId);
+  if (mission) return mission;
+  if (!emptyMission) emptyMission = blankMission();
+  return emptyMission;
+}
+
+// The open sortie of the picked mission, or null.
+function activeSortie() {
+  if (!state || !state.activeId) return null;
+  const log = state.logs.find(l => l.id === state.activeId);
+  return log && log.missionId === state.activeMissionId ? log : null;
+}
+
+let detachedLog = null;
+
+/* The open sortie. With none open it is an empty stand-in that is never saved:
+   the sortie tabs stay locked then, so nothing is typed into it. */
 function activeLog() {
-  if (!state) return blankLog();
-  let log = state.logs.find(l => l.id === state.activeId);
-  if (!log) {
-    log = state.logs[0];
-    state.activeId = log.id;
-  }
-  return log;
+  const log = activeSortie();
+  if (log) return log;
+  if (!detachedLog) detachedLog = blankLog('');
+  return detachedLog;
 }
 
 /* ---------- persistence ---------- */
@@ -1745,24 +1931,26 @@ function fmtEntryPosition(entry) {
    ========================================================================= */
 
 function renderStrip() {
-  const log = activeLog();
+  const mission = activeMission();
+  const log = activeSortie();
   const main = $('#stripMain');
   const sub = $('#stripSub');
   if (!main || !sub) return;
 
-  // Header reads: mission number, then callsign and crew names.
-  main.textContent = log.mission || 'New Mission';
-  // Until the mission has a number, an arrow points at it: that is where to begin.
+  // Header reads: mission number, then the sortie, its callsign and crew names.
+  main.textContent = mission ? (mission.number || 'Mission') : 'New Mission';
+  // Until a sortie is open, an arrow points at the next step.
   const callout = $('#stripCallout');
-  if (callout) callout.hidden = sortieReady(log);
-  if (callout) callout.textContent = log.missionCreated ? 'Add a sortie' : 'Start Here';
+  if (callout) callout.hidden = !!log;
+  if (callout) callout.textContent = mission ? 'Add a sortie' : 'Start Here';
   const sortieBtn = $('#sortieSwitch');
-  if (sortieBtn) sortieBtn.hidden = !sortieReady(log);
-  if (sortieBtn) {
+  if (sortieBtn) sortieBtn.hidden = !log;
+  if (sortieBtn && log) {
     const sorties = missionSorties(log);
     $('#sortieLabel').textContent = sortieLabel(log, sorties.indexOf(log)) +
       (sorties.length > 1 ? ' of ' + sorties.length : '');
   }
+  if (!log) { sub.textContent = ''; return; }
   const rest = [log.callsign, ...crewInOrder(log).map(m => m.name)]
     .map(value => String(value || '').trim())
     .filter(Boolean);
@@ -1771,8 +1959,7 @@ function renderStrip() {
 
 function renderTabbar() {
   const bar = $('#tabbar');
-  if (bar) bar.classList.toggle('locked', !sortieReady());
-  if (bar) bar.classList.toggle('no-mission', !activeLog().missionCreated);
+  if (bar) bar.classList.toggle('locked', !activeSortie());
   $$('#tabbar .tab').forEach(btn => {
     const on = btn.dataset.tab === activeTab;
     btn.classList.toggle('active', on);
@@ -1804,8 +1991,8 @@ function render() {
   const log = activeLog();
 
   if (!TABS.includes(activeTab) && !SCREENS.includes(activeTab)) activeTab = defaultTab(log);
-  // Sorties needs a mission to show
-  if (activeTab !== 'logbook' && !log.missionCreated) activeTab = 'logbook';
+  // Brief…Sign are about one sortie: Missions until one is open
+  if (activeTab !== 'logbook' && !activeSortie()) activeTab = 'logbook';
   if (activeTab === 'logbook') view.innerHTML = logbookView();
   else if (activeTab === 'plan') view.innerHTML = planView(log);
   else if (activeTab === 'fly') view.innerHTML = flyView(log);
@@ -1943,10 +2130,10 @@ function tachCardHTML(log) {
         <div class="meter-value mono strong" id="tach-card-total">${one(totals.tach)}</div>
       </div>
       <div class="totals" style="grid-template-columns:1fr 1fr">
-        <div class="total"><div class="tl">Hobbs in area</div><div class="tv" id="meter-hobbs-area">${one(totals.hobbsArea)}</div></div>
-        <div class="total"><div class="tl">Hobbs to / from</div><div class="tv" id="meter-hobbs-tofrom">${one(totals.hobbsToFrom)}</div></div>
+        <div class="total"><div class="tl">Hobbs In Area</div><div class="tv" id="meter-hobbs-area">${one(totals.hobbsArea)}</div></div>
+        <div class="total"><div class="tl">Hobbs To/From</div><div class="tv" id="meter-hobbs-tofrom">${one(totals.hobbsToFrom)}</div></div>
       </div>
-      <div class="sketch-hint">Hobbs comes from the checkpoints; correct it under Flight times above. In area is Out of Area minus In Area, and to / from is the rest, so the two add up to the total. On G1000 aircraft the tach reading is ENG HOURS.</div>
+      <div class="sketch-hint">Hobbs comes from the checkpoints; correct it under Times above. In area is Out of Area minus In Area, and to / from is the rest, so the two add up to the total. On G1000 aircraft the tach reading is ENG HOURS.</div>
     </section>`;
 }
 
@@ -1995,30 +2182,26 @@ function installBannerHTML() {
 
 const TABS = ['logbook', 'plan', 'fly', 'notes', 'debrief', 'sign'];
 
-// Where a sortie opens: Missions until one is picked, Sorties until it has a sortie, then Fly.
-function defaultTab(log) {
-  const l = log || activeLog();
-  if (!l.missionCreated) return 'logbook';
-  return l.started ? 'fly' : 'plan';
+// Where a sortie opens: Missions until one is open, then Fly.
+function defaultTab() {
+  return activeSortie() ? 'fly' : 'logbook';
 }
 
-// The sortie tabs only open once the mission exists and has a sortie.
+// The sortie tabs (Brief…Sign) open once a sortie of the picked mission is open.
+// Given a log: whether it is a real, saved sortie (not the empty stand-in).
 function sortieReady(log) {
-  const l = log || activeLog();
-  return !!(l.missionCreated && l.started);
+  if (log) return !!(state && state.logs.includes(log));
+  return !!activeSortie();
 }
 
 /* ---------- missions above sorties ----------
-   Missions (every mission on this iPad) → Sorties (the picked mission, its
-   sorties and the open sortie's set-up) → Fly…Sign, about one sortie.
+   Missions (every mission on this iPad, each with its sorties, as in WMIRS)
+   → Brief, Fly, Notes, Debrief, Sign: one sortie, from WMIRS brief to debrief.
    Internally the first two tabs keep their old keys, 'logbook' and 'plan'. */
 const SCREENS = [];
 
-function missionIdsInOrder() {
-  const ids = [];
-  state.logs.slice().sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))
-    .forEach(l => { if (!ids.includes(l.missionId)) ids.push(l.missionId); });
-  return ids;
+function missionsInOrder() {
+  return state.missions.slice().sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0));
 }
 
 function showScreen(screen) {
@@ -2030,94 +2213,106 @@ function showScreen(screen) {
   window.scrollTo({ top: 0, behavior: 'auto' });
 }
 
+function missionTitle(mission) {
+  return mission.number || 'Mission';
+}
+
+function closedBadge(mission) {
+  return mission.closed ? '<span class="mission-closed">Closed</span>' : '';
+}
+
 /* ---------- Missions tab ----------
-   The first tab: every mission on this iPad with its sorties, newest first,
-   and where a new mission (from WMIRS) or sortie is added. */
+   The first tab: the picked mission with its sorties, then every other mission
+   on this iPad, newest first. Missions come from WMIRS; + adds one here. */
 function logbookView() {
-  const active = activeLog();
-  const ids = missionIdsInOrder().filter(id => state.logs.some(l => l.missionId === id && l.missionCreated));
-  const previous = ids.filter(id => id !== (active.missionCreated ? active.missionId : null));
-  const sorties = state.logs.filter(l => l.started);
-  const hobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
-  const nm = sorties.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
-  const rows = previous.map(id => {
-    const all = state.logs.filter(l => l.missionId === id);
-    const first = all[0];
-    const flown = all.filter(l => l.started);
-    const missionHobbs = flown.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
-    const meta = [first.sar.missionDate, first.base,
-      flown.length + ' sortie' + (flown.length === 1 ? '' : 's'),
+  const active = activeMission();
+  const previous = missionsInOrder().filter(m => m !== active);
+  const hobbs = state.logs.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
+  const nm = state.logs.reduce((sum, l) => { const t = trackStats(l); return sum + (t ? t.nm : 0); }, 0);
+  const rows = previous.map(mission => {
+    const sorties = missionSorties(mission.id);
+    const missionHobbs = sorties.reduce((sum, l) => sum + (timeTotals(l).hobbs || 0), 0);
+    const meta = [mission.name, mission.symbol, mission.date, mission.base,
+      sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
       missionHobbs ? fmtDecimal(missionHobbs, 1) + ' Hobbs' : ''].filter(Boolean).join(' · ');
-    return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(id)}">
-      <span class="log-name">${esc(first.mission)}</span>
+    return `<button type="button" class="log-row mission-row" data-act="open-mission" data-id="${esc(mission.id)}">
+      <span class="log-name">${esc(missionTitle(mission))} ${closedBadge(mission)}</span>
       <span class="log-meta">${esc(meta)}</span>
       <svg class="row-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>`;
   }).join('');
   return `<div class="stack">
-    ${activeMissionHTML(active)}
+    ${active ? activeMissionHTML(active) : ''}
     <section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>${active.missionCreated ? 'Previous missions' : 'Missions'}</h2><span class="count-badge">${previous.length}</span></div>
+        <div class="head-left"><h2>${active ? 'Previous missions' : 'Missions'}</h2><span class="count-badge">${previous.length}</span></div>
       </div>
       ${rows ? `<div class="log-list">${rows}</div>`
-        : `<div class="empty"><strong>${active.missionCreated ? 'No other missions' : 'No missions yet'}</strong>Tap + to add a mission from WMIRS.</div>`}
+        : `<div class="empty"><strong>${active ? 'No other missions' : 'No missions yet'}</strong>Tap + to add a mission from WMIRS.</div>`}
       <div class="totals" style="grid-template-columns:repeat(3,1fr)">
-        <div class="total"><div class="tl">Sorties</div><div class="tv">${sorties.length}</div></div>
+        <div class="total"><div class="tl">Sorties</div><div class="tv">${state.logs.length}</div></div>
         <div class="total"><div class="tl">Hobbs</div><div class="tv">${fmtDecimal(hobbs, 1) || '0.0'}</div></div>
         <div class="total"><div class="tl">Tracked</div><div class="tv">${Math.round(nm)} NM</div></div>
       </div>
-      <div class="sheet-note">Missions are created in WMIRS. Add one here with its mission number, then add each sortie you fly on it. Everything stays on this iPad.</div>
+      <div class="sheet-note">Missions and their sorties are created in WMIRS. Add each here with the numbers WMIRS gave it. Everything stays on this iPad.</div>
     </section>
   </div>
   ${fabHTML('new-mission', 'Add a mission')}`;
 }
 
-// The mission being flown, at the top of Missions: its sorties and the way to add one.
-function activeMissionHTML(log) {
-  if (!log.missionCreated) return '';
-  const flown = missionSorties(log).filter(l => l.started);
-  const meta = [log.sar.missionDate, log.base].filter(Boolean).join(' · ');
+// The picked mission, at the top of Missions: its sorties and the way to add one.
+function activeMissionHTML(mission) {
+  const sorties = missionSorties(mission.id);
+  const meta = [mission.symbol, mission.date, mission.base].filter(Boolean).join(' · ');
   return `<section class="card card-current active-mission">
     <div class="card-head">
       <div class="head-left"><h2>Active mission</h2></div>
       <button class="btn small" data-act="edit-mission">Mission details</button>
     </div>
     <div class="active-mission-title">
-      <span class="active-mission-number">${esc(log.mission)}</span>
+      <span class="active-mission-number">${esc(missionTitle(mission))} ${closedBadge(mission)}</span>
+      ${mission.name ? `<span>${esc(mission.name)}</span>` : ''}
       ${meta ? `<span class="muted">${esc(meta)}</span>` : ''}
     </div>
-    ${flown.length ? `<div class="log-list">${flown.map(sortieCardRowHTML).join('')}</div>`
-      : '<p class="sheet-note" style="margin-top:4px">No sorties yet. A sortie is one flight of this mission.</p>'}
+    ${sorties.length ? `<div class="log-list">${sorties.map(sortieCardRowHTML).join('')}</div>`
+      : '<p class="sheet-note" style="margin-top:4px">No sorties yet. Add each air sortie of this mission as it is in WMIRS.</p>'}
     <div class="btn-row" style="margin-top:12px">
-      <button class="btn primary" data-act="start-sortie">${flown.length ? '+ Next sortie' : '+ Add the first sortie'}</button>
+      <button class="btn primary" data-act="add-sortie">+ Add sortie</button>
     </div>
   </section>`;
 }
 
-// The round add button in the bottom corner: a mission on Missions, a sortie on Sorties.
+// The round add button in the bottom corner: a mission on Missions, a sortie on Brief.
 function fabHTML(act, label) {
   return `<button type="button" class="fab" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
   </button>`;
 }
 
-// Adding a mission: its WMIRS number (required), date and base. Then its first sortie.
+function missionFieldsHTML(values, bind) {
+  const input = (key, opts) => bind
+    ? textInput('m.' + key, values[key], opts)
+    : `<input class="input ${opts.className || ''}" id="nm-${key}" autocapitalize="${opts.autocap || 'characters'}" placeholder="${esc(opts.placeholder || '')}" value="${esc(values[key] || '')}">`;
+  return `<div class="form-grid">
+      <label class="field"><span>Mission No.</span>${input('number', { autocap: 'characters', placeholder: '27-T-3852' })}</label>
+      <label class="field"><span>Mission Symbol</span>${input('symbol', { autocap: 'characters', placeholder: 'A31' })}</label>
+      <label class="field span-2"><span>Mission Name</span>${input('name', { autocap: 'words', placeholder: 'As in WMIRS' })}</label>
+      <label class="field"><span>Mission date</span>
+        <div class="input-btn">
+          ${input('date', { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
+          <button type="button" class="mini" data-act="${bind ? 'mission-today' : 'nm-today'}">Today</button>
+        </div></label>
+      <label class="field"><span>Base</span>${input('base', { autocap: 'characters', placeholder: 'KBED' })}</label>
+    </div>`;
+}
+
+// Adding a mission: its WMIRS number (required), symbol, name, date and base.
 function openNewMissionSheet() {
   openSheet({
     title: 'Add mission',
     sub: 'From WMIRS',
-    body: `<div class="form-grid">
-      <label class="field span-2"><span>Mission number</span>
-        <input class="input" id="nm-number" autocapitalize="characters" placeholder="e.g. 24-001"></label>
-      <label class="field"><span>Mission date</span>
-        <div class="input-btn">
-          <input class="input mono" id="nm-date" autocapitalize="characters" placeholder="DD MMM YY">
-          <button type="button" class="mini" data-act="nm-today">Today</button>
-        </div></label>
-      <label class="field"><span>Base</span><input class="input" id="nm-base" autocapitalize="characters" placeholder="KBUY"></label>
-    </div>
-    <p class="sheet-note">Only the mission number is required. Date and base can be added later.</p>`,
+    body: `${missionFieldsHTML({}, false)}
+    <p class="sheet-note">Only the mission number is required. The rest can be added later.</p>`,
     footer: `<button type="button" class="btn" data-close>Cancel</button>
       <button type="button" class="btn primary" data-act="nm-save">Add mission</button>`
   });
@@ -2125,23 +2320,19 @@ function openNewMissionSheet() {
   if (number) setTimeout(() => number.focus(), 60);
 }
 
-// The mission's own details, edited from Missions or the header: shared by every sortie.
+// The picked mission's own details, from Missions or the header.
 function openMissionSheet() {
-  const log = activeLog();
+  const mission = activeMission();
+  if (!mission) { openNewMissionSheet(); return; }
   openSheet({
     title: 'Mission details',
     sub: 'Shared by every sortie',
-    body: `<div class="form-grid" id="mission-card">
-      ${field('Mission number', textInput('mission', log.mission, { autocap: 'characters', placeholder: 'e.g. 24-001' }), 'span-2')}
-      <label class="field"><span>Mission date</span>
-        <div class="input-btn">
-          ${textInput('sar.missionDate', log.sar.missionDate, { className: 'mono', autocap: 'characters', placeholder: 'DD MMM YY' })}
-          <button type="button" class="mini" data-act="sar-today">Today</button>
-        </div>
-      </label>
-      ${field('Base', textInput('base', log.base, { placeholder: 'KBUY' }))}
-    </div>`,
-    footer: `<button type="button" class="btn danger" data-act="del-mission">Delete mission</button>
+    body: `<div id="mission-card">${missionFieldsHTML(mission, true)}</div>
+    <p class="sheet-note">${mission.closed
+      ? 'This mission is closed. Reopen it to keep adding sorties.'
+      : 'Close the mission once it is closed in WMIRS. Its sorties stay on this iPad.'}</p>`,
+    footer: `<button type="button" class="btn danger left" data-act="del-mission">Delete mission</button>
+      <button type="button" class="btn" data-act="toggle-mission-closed">${mission.closed ? 'Reopen mission' : 'Close mission'}</button>
       <button type="button" class="btn primary" data-close>Done</button>`,
     onClose: () => render()
   });
@@ -2160,16 +2351,16 @@ function saveNewMission() {
     toast('Enter the mission number');
     return;
   }
-  // reuse the empty record a fresh install starts with
-  const current = activeLog();
-  const log = !current.missionCreated && !current.started && !current.mission ? current : blankLog();
-  if (log !== current) state.logs.push(log);
-  log.mission = value;
-  log.sar.missionDate = String($('#nm-date').value || '').trim().toUpperCase();
-  log.base = String($('#nm-base').value || '').trim().toUpperCase();
-  log.missionCreated = true;
-  log.sortie = log.sortie || '1';
-  state.activeId = log.id;
+  const read = id => String(($('#nm-' + id) || {}).value || '').trim();
+  const mission = blankMission();
+  mission.number = value;
+  mission.symbol = read('symbol').toUpperCase();
+  mission.name = read('name');
+  mission.date = read('date').toUpperCase();
+  mission.base = read('base').toUpperCase();
+  state.missions.push(mission);
+  state.activeMissionId = mission.id;
+  state.activeId = '';
   closeSheet();
   activeTab = 'logbook';
   save();
@@ -2184,37 +2375,90 @@ function sortieCardRowHTML(l, index) {
     ? fmtZ(l.times.engineStart.time) + (l.times.shutDown.time ? '–' + fmtZ(l.times.shutDown.time) : ' →')
     : 'not flown yet';
   const signed = l.signoff.signature ? '<span class="sortie-signed">Signed</span>' : '';
+  const meta = [l.sortieType, (l.aircraft || 'no tail') + (l.callsign ? ' · ' + l.callsign : ''), times,
+    (l.entries.length + l.observations.length) + ' logged', crew.join(', '),
+    l.receivedFrom ? 'from ' + l.receivedFrom : ''].filter(Boolean).join(' · ');
   return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
     <span class="log-name">${esc(sortieLabel(l, index))} ${signed}</span>
-    <span class="log-meta">${esc(l.aircraft || 'no tail')}${l.callsign ? ' · ' + esc(l.callsign) : ''} · ${esc(times)} · ${l.entries.length + l.observations.length} logged${crew.length ? ' · ' + esc(crew.join(', ')) : ''}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
+    <span class="log-meta">${esc(meta)}</span>
   </button>`;
 }
 
-// The mission and its sorties: the top of the Sorties tab.
-function missionSectionsHTML(log) {
-  const sorties = missionSorties(log).filter(l => l.started);
-  return `<button type="button" class="back-link" data-act="show-missions">‹ Missions</button>
+function selectInput(path, value, options, label) {
+  const list = value && !options.includes(value) ? options.concat([value]) : options;
+  return `<select class="input" data-bind="${esc(path)}" aria-label="${esc(label || '')}">
+    <option value="">-- Select --</option>
+    ${list.map(option => `<option value="${esc(option)}" ${option === value ? 'selected' : ''}>${esc(option)}</option>`).join('')}
+  </select>`;
+}
 
-    ${sorties.length ? `<section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Sorties</h2><span class="count-badge">${sorties.length}</span></div>
-      </div>
-      <div class="log-list">${sorties.map(sortieCardRowHTML).join('')}</div>
-      <div class="sheet-note">Tap a sortie to open it. + starts the next one with the same crew, aircraft, frequencies and search area.</div>
-    </section>` : `<section class="card card-current" id="new-sortie-card">
-      <div class="card-head"><div class="head-left"><h2>New sortie</h2></div></div>
-      <p class="sheet-note" style="margin-top:0">A sortie is one flight of this mission. Crew, search area and the rest are set up once it is added.</p>
-      <div class="form-grid">
-        ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
-        ${field('Tracking number', textInput('sar.tracking', log.sar.tracking, { className: 'mono', autocap: 'characters' }))}
-        ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
-        ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
-      </div>
-      <div class="btn-row" style="margin-top:14px">
-        <button class="btn primary" data-act="add-sortie">Add sortie</button>
-      </div>
-    </section>`}
-`;
+/* Adding a sortie: what WMIRS shows on its Air Sortie Add/Edit page. Crew,
+   frequencies and the search area carry over from the mission's last sortie. */
+function openAddSortieSheet() {
+  const mission = activeMission();
+  if (!mission) { openNewMissionSheet(); return; }
+  const sorties = missionSorties(mission.id);
+  const prev = sorties[sorties.length - 1];
+  const input = (id, value, placeholder) =>
+    `<input class="input" id="ns-${id}" autocapitalize="characters" placeholder="${esc(placeholder)}" value="${esc(value || '')}">`;
+  openSheet({
+    title: 'Add sortie',
+    sub: missionTitle(mission) + (mission.symbol ? ' / ' + mission.symbol : ''),
+    body: `<div class="form-grid">
+      <label class="field"><span>Sortie No.</span>${input('number', nextSortieNumber(sorties), 'A0001')}</label>
+      <label class="field"><span>Sortie Type</span>
+        <select class="input" id="ns-type">
+          <option value="">-- Select --</option>
+          ${SORTIE_TYPES.map(t => `<option ${prev && prev.sortieType === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+        </select></label>
+      <label class="field"><span>Tail No.</span>${input('tail', prev && prev.aircraft, 'N123CP')}</label>
+      <label class="field"><span>Call Sign</span>${input('callsign', prev && prev.callsign, 'CAP1234')}</label>
+      <label class="field"><span>Dep. Airport</span>${input('dep', prev ? prev.destAirport || mission.base : mission.base, 'KBED')}</label>
+      <label class="field"><span>Dest. Airport</span>${input('dest', mission.base, 'KBED')}</label>
+    </div>
+    <p class="sheet-note">As in WMIRS. ${prev ? 'Crew, frequencies, nav aids and the search area are copied from ' + esc(sortieLabel(prev, sorties.length - 1)) + '.' : 'Crew, frequencies and the search area are set up on Brief.'}</p>`,
+    footer: `<button type="button" class="btn" data-close>Cancel</button>
+      <button type="button" class="btn primary" data-act="ns-save">Add sortie</button>`
+  });
+  const number = $('#ns-number');
+  if (number && !number.value) setTimeout(() => number.focus(), 60);
+}
+
+function saveAddSortie() {
+  const mission = activeMission();
+  if (!mission) return;
+  const read = id => String(($('#ns-' + id) || {}).value || '').trim();
+  const sorties = missionSorties(mission.id);
+  const prev = sorties[sorties.length - 1];
+  const log = blankLog(mission.id);
+  if (prev) {
+    // the next sortie of this mission: same crew, frequencies and search area;
+    // times, Hobbs, entries, observations and results start empty
+    ['sectional', 'grid', 'altitude', 'airspeed'].forEach(key => { log[key] = prev[key]; });
+    log.crew = deepClone(prev.crew).map(m => Object.assign(m, { id: uid() }));
+    log.radio = deepClone(prev.radio);
+    log.navAids = deepClone(prev.navAids);
+    log.entry = deepClone(prev.entry);
+    log.exit = deepClone(prev.exit);
+    ['reporter', 'reporterCapid', 'areaName'].forEach(key => { log.sar[key] = prev.sar[key]; });
+    log.sar.corners = deepClone(prev.sar.corners);
+    log.signoff.name = prev.signoff.name;
+    log.signoff.capid = prev.signoff.capid;
+  }
+  log.sortie = read('number').toUpperCase();
+  log.sortieType = read('type');
+  log.aircraft = read('tail').toUpperCase();
+  log.callsign = read('callsign').toUpperCase();
+  log.depAirport = read('dep').toUpperCase();
+  log.destAirport = read('dest').toUpperCase();
+  state.logs.push(log);
+  state.activeId = log.id;
+  closeSheet();
+  activeTab = 'plan';   // check the copied crew, frequencies and search area
+  save();
+  render();
+  window.scrollTo(0, 0);
+  toast(sortieLabel(log, sorties.length) + ' added' + (prev ? ' · crew and search area copied' : ' · set up its crew and search area'));
 }
 
 function opsCardHTML(log) {
@@ -2260,7 +2504,7 @@ function flyView(log) {
   </div>`;
 }
 
-// One column of the CAPF 104a plan-versus-actual grid: planned on Sorties, actual on Debrief.
+// One column of the CAPF 104a plan-versus-actual grid: planned on Brief, actual on Debrief.
 function sarColumnHTML(log, column) {
   const values = log.sar[column];
   const text = ([key, label, opts]) => field(label, textInput('sar.' + column + '.' + key, values[key], opts));
@@ -2283,22 +2527,21 @@ function planView(log) {
     <button type="button" class="row-del" data-act="del-navaid" data-index="${i}" aria-label="Delete nav aid">×</button>
   </div>`).join('');
 
-  // Until the mission has a sortie, the tab is the mission and the new-sortie form.
-  if (!sortieReady(log)) return `<div class="stack">${missionSectionsHTML(log)}</div>`;
-
+  const mission = missionOf(log);
   return `<div class="stack">
-    ${missionSectionsHTML(log)}
     <section class="card" id="sortie-card">
       <div class="card-head">
         <div class="head-left"><h2>${esc(sortieLabel(log, missionSorties(log).indexOf(log)))}</h2></div>
-        <span class="muted small">This sortie only</span>
+        <span class="muted small">${esc([mission.number, mission.symbol].filter(Boolean).join(' / '))}</span>
       </div>
       <div class="form-grid">
-        ${field('Sortie', textInput('sortie', log.sortie, { inputmode: 'numeric', placeholder: '1' }))}
-        ${field('Tracking number', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters', placeholder: log.sortie ? 'Sortie ' + log.sortie : 'Sortie number' }))}
-        ${field('Aircraft N#', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N12345' }))}
-        ${field('Callsign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP 1234' }))}
-        ${field('CAP flight', textInput('capFlight', log.capFlight, { placeholder: 'NC-123' }))}
+        ${field('Sortie No.', textInput('sortie', log.sortie, { autocap: 'characters', placeholder: 'A0001' }))}
+        ${field('Sortie Type', selectInput('sortieType', log.sortieType, SORTIE_TYPES, 'Sortie Type'))}
+        ${field('Tail No.', textInput('aircraft', log.aircraft, { autocap: 'characters', placeholder: 'N123CP' }))}
+        ${field('Call Sign', textInput('callsign', log.callsign, { autocap: 'characters', placeholder: 'CAP1234' }))}
+        ${field('Dep. Airport', textInput('depAirport', log.depAirport, { autocap: 'characters', placeholder: 'KBED' }))}
+        ${field('Dest. Airport', textInput('destAirport', log.destAirport, { autocap: 'characters', placeholder: 'KBED' }))}
+        ${field('Tracking No.', textInput('sar.tracking', sar.tracking, { className: 'mono', autocap: 'characters' }))}
       </div>
       <div class="subhead">Crew</div>
       <div class="form-grid">
@@ -2320,6 +2563,16 @@ function planView(log) {
         ${field('Reporting MO / MP / MS', textInput('sar.reporter', sar.reporter, { placeholder: 'Name' }))}
         ${field('Reporting CAPID', textInput('sar.reporterCapid', sar.reporterCapid, { className: 'mono', inputmode: 'numeric' }))}
       </div>
+    </section>
+
+    <section class="card" id="brief-card">
+      <div class="card-head">
+        <div class="head-left"><h2>Brief</h2></div>
+        <span class="muted small">From the WMIRS sortie brief</span>
+      </div>
+      ${textAreaField('Sortie Objectives', 'objectives', log.objectives, 1000)}
+      ${textAreaField('Sortie Deliverables', 'deliverables', log.deliverables, 1000)}
+      ${textAreaField('Route Of Flight', 'route', log.route, 1000)}
     </section>
 
     <section class="card">
@@ -2380,6 +2633,10 @@ function planView(log) {
       <div class="form-grid">
         <label class="field"><span>Main</span><input class="input mono" data-bind="radio.main" value="${esc(log.radio.main)}" placeholder="e.g. 123.45"></label>
         <label class="field"><span>Guard</span><input class="input mono" data-bind="radio.guard" value="${esc(log.radio.guard)}" placeholder="121.5"></label>
+        <label class="field"><span>Air/Ground</span><input class="input mono" data-bind="radio.airGround" value="${esc(log.radio.airGround)}"></label>
+        <label class="field"><span>Air/Air</span><input class="input mono" data-bind="radio.airAir" value="${esc(log.radio.airAir)}"></label>
+        <label class="field"><span>Base Callsign</span><input class="input" data-bind="radio.baseCallsign" value="${esc(log.radio.baseCallsign)}" autocapitalize="characters"></label>
+        <label class="field"><span>Base Freq.</span><input class="input mono" data-bind="radio.baseFreq" value="${esc(log.radio.baseFreq)}"></label>
         <label class="field"><span>ATIS / AWOS</span><input class="input mono" data-bind="radio.atis" value="${esc(log.radio.atis)}"></label>
         <label class="field"><span>CTAF</span><input class="input mono" data-bind="radio.ctaf" value="${esc(log.radio.ctaf)}"></label>
         <label class="field"><span>Unicom</span><input class="input mono" data-bind="radio.unicom" value="${esc(log.radio.unicom)}"></label>
@@ -2402,9 +2659,13 @@ function planView(log) {
   ${fabHTML('add-sortie', 'Add the next sortie')}`;
 }
 
+/* Debrief, in the order of the WMIRS Air Sortie Debrief: flight plan closed,
+   ATD / ATA, Hobbs and tach, fuel and oil, then the narrative and the sortie's
+   effectiveness. The CAPF 104a search results follow. */
 function debriefView(log) {
   const totals = timeTotals(log);
   const sar = log.sar;
+  const d = log.debrief;
   const rating = (label, key) => `
       <div class="sar-rating">
         <div class="sar-label">${esc(label)}</div>
@@ -2415,20 +2676,49 @@ function debriefView(log) {
   return `<div class="stack">
     <section class="card">
       <div class="card-head">
-        <div class="head-left"><h2>Flight times</h2></div>
+        <div class="head-left"><h2>Times</h2></div>
         <span class="muted small">UTC</span>
       </div>
+      <label class="check-row"><input type="checkbox" data-bind="debrief.flightPlanClosed" ${d.flightPlanClosed ? 'checked' : ''}> Flight Plan Closed</label>
       ${TIME_DEFS.map(def => timeRowHTML(log, def)).join('')}
       <div class="totals">
+        <div class="total"><div class="tl">ATD</div><div class="tv" id="tot-atd">${fmtZ(log.times.engineStart.time) || '—'}</div></div>
+        <div class="total"><div class="tl">ATA</div><div class="tv" id="tot-ata">${fmtZ(log.times.shutDown.time) || '—'}</div></div>
+        <div class="total"><div class="tl">ATA − ATD</div><div class="tv" id="tot-engine">${fmtDuration(totals.engine)}</div></div>
         <div class="total"><div class="tl">Wheels up → down</div><div class="tv" id="tot-flight">${fmtDuration(totals.flight)}</div></div>
-        <div class="total"><div class="tl">Engine start → shut</div><div class="tv" id="tot-engine">${fmtDuration(totals.engine)}</div></div>
-        <div class="total"><div class="tl">Tach</div><div class="tv" id="tot-tach">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
-        <div class="total"><div class="tl">Hobbs used</div><div class="tv" id="tot-hobbs">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
       </div>
-      <div class="note-strip">Correct the checkpoint times and Hobbs here. Editing a time also updates the matching entry in the flight log.</div>
+      <div class="note-strip">ATD is Engine Start and ATA is Shut Down, for the WMIRS debrief. Correct the times and Hobbs here; editing a time also updates the matching checkpoint on the timeline.</div>
     </section>
 
     ${tachCardHTML(log)}
+
+    <section class="card">
+      <div class="card-head">
+        <div class="head-left"><h2>Fuel &amp; oil</h2></div>
+        <span class="muted small">For the WMIRS debrief</span>
+      </div>
+      <div class="form-grid">
+        ${field('Fuel Used (Gal)', textInput('debrief.fuelGal', d.fuelGal, { className: 'mono', inputmode: 'decimal' }))}
+        ${field('Oil Used (Qt)', textInput('debrief.oilQt', d.oilQt, { className: 'mono', inputmode: 'decimal' }))}
+        ${field('Fuel & Oil Cost ($)', textInput('debrief.fuelCost', d.fuelCost, { className: 'mono', inputmode: 'decimal' }))}
+        ${field('Receipt #', textInput('debrief.receipt', d.receipt, { className: 'mono', autocap: 'characters' }))}
+      </div>
+      <div class="sketch-hint">Upload the receipt itself in WMIRS.</div>
+    </section>
+
+    <section class="card" id="sortie-debrief-card">
+      <div class="card-head">
+        <div class="head-left"><h2>Sortie debrief</h2></div>
+        <span class="muted small">As in WMIRS</span>
+      </div>
+      ${DEBRIEF_TEXT.map(([key, label, max]) => textAreaField(label, 'debrief.' + key, d[key], max)).join('')}
+      <div class="field" style="margin-top:14px"><span>Sortie Effectiveness</span>${sarChoice('debrief.effectiveness', d.effectiveness, SORTIE_EFFECTIVENESS)}</div>
+      <div class="form-grid" style="margin-top:12px">
+        ${field('Reason (if not successful)', selectInput('debrief.reason', d.reason, NOT_SUCCESSFUL_REASONS, 'Reason (if not successful)'))}
+        ${field('Reason (Other)', textInput('debrief.reasonOther', d.reasonOther))}
+      </div>
+      <div class="sketch-hint">WMIRS needs Remarks for anything but Successful.</div>
+    </section>
 
     ${trackCardHTML(log)}
 
@@ -2441,7 +2731,10 @@ function debriefView(log) {
     </section>
 
     <section class="card">
-      <div class="card-head"><div class="head-left"><h2>Crew remarks &amp; notes</h2></div></div>
+      <div class="card-head">
+        <div class="head-left"><h2>Search effectiveness</h2></div>
+        <span class="muted small">CAPF 104a · crew remarks</span>
+      </div>
       ${rating('Effectiveness', 'effectiveness')}
       ${rating('Visibility', 'visibility')}
       <label class="field" style="margin-top:14px"><span>Written comments</span>
@@ -2743,6 +3036,8 @@ function updateOutputs() {
     if (el) el.textContent = value;
   };
   set('#tot-flight', fmtDuration(totals.flight));
+  set('#tot-atd', fmtZ(log.times.engineStart.time) || '—');
+  set('#tot-ata', fmtZ(log.times.shutDown.time) || '—');
   set('#tot-engine', fmtDuration(totals.engine));
   set('#tot-tach', totals.tach == null ? '—' : fmtDecimal(totals.tach, 1));
   set('#tot-hobbs', totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1));
@@ -3192,6 +3487,20 @@ function acceptTerms() {
 
 function field(label, inner, className) {
   return `<label class="field ${className || ''}"><span>${esc(label)}</span>${inner}</label>`;
+}
+
+// A long text box with WMIRS's character limit for it, counted as you type.
+function textAreaField(label, path, value, max, placeholder) {
+  const length = String(value || '').length;
+  return `<label class="field text-field"><span>${esc(label)}<small class="char-count${length >= max ? ' full' : ''}">${length}/${max}</small></span>
+    <textarea class="input obs-text" data-bind="${esc(path)}" data-autogrow maxlength="${max}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ''}>${esc(value || '')}</textarea></label>`;
+}
+
+function updateCharCount(el) {
+  const count = el.closest('.text-field') && el.closest('.text-field').querySelector('.char-count');
+  if (!count || !(el.maxLength > 0)) return;
+  count.textContent = el.value.length + '/' + el.maxLength;
+  count.classList.toggle('full', el.value.length >= el.maxLength);
 }
 
 function textInput(path, value, options) {
@@ -3724,7 +4033,7 @@ function menuSheet() {
           </button>
           <button type="button" class="menu-item" data-act="export-csv">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></svg>
-            <span>Flight log CSV<span class="mi-sub">Time, Hobbs, position and remarks</span></span>
+            <span>Sortie log CSV<span class="mi-sub">Time, Hobbs, position and remarks</span></span>
           </button>
         </div>
       </div>
@@ -4005,7 +4314,9 @@ function addOpsCheck() {
 }
 
 function switchLog(id) {
-  if (!state.logs.some(l => l.id === id)) return;
+  const log = state.logs.find(l => l.id === id);
+  if (!log) return;
+  state.activeMissionId = log.missionId;
   state.activeId = id;
   closeSheet();
   activeTab = defaultTab();
@@ -4014,28 +4325,18 @@ function switchLog(id) {
   window.scrollTo(0, 0);
 }
 
-/* ---------- missions and sorties ----------
-   Each log is one sortie. Sorties that share a missionId belong to one mission,
-   and the mission-level fields below are kept the same on all of them. */
-
-const MISSION_FIELDS = ['mission', 'base', 'sar.missionDate', 'signoff.name', 'signoff.capid', 'missionCreated'];
-
-function missionSorties(log) {
-  const l = log || activeLog();
+// A mission's sorties, oldest first. Takes a sortie, a mission id, or nothing
+// for the picked mission.
+function missionSorties(of) {
+  const id = typeof of === 'string' ? of : of ? of.missionId : state && state.activeMissionId;
+  if (!state || !id) return [];
   return state.logs
-    .filter(other => other.missionId === l.missionId)
+    .filter(other => other.missionId === id)
     .sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
 }
 
 function getPath(obj, path) {
   return path.split('.').reduce((value, key) => (value == null ? value : value[key]), obj);
-}
-
-// Copy a mission-level field from one sortie to the rest of its mission.
-function syncMissionField(log, path) {
-  if (!MISSION_FIELDS.includes(path)) return;
-  const value = getPath(log, path);
-  missionSorties(log).forEach(other => { if (other !== log) setPath(other, path, value); });
 }
 
 // Logs saved before 1.9.0 have no missionId: those with the same mission number
@@ -4064,72 +4365,37 @@ function sortieLabel(log, index) {
   return 'Sortie ' + (String(log.sortie || '').trim() || String(index + 1));
 }
 
+// WMIRS numbers sorties A0001, A0002…; suggest one past the highest so far.
 function nextSortieNumber(sorties) {
-  const numbers = sorties.map(l => parseInt(l.sortie, 10)).filter(Number.isFinite);
-  return numbers.length ? String(Math.max(...numbers) + 1) : '';
+  let best = null;
+  sorties.forEach(l => {
+    const match = String(l.sortie || '').trim().toUpperCase().match(/^(.*?)(\d+)$/);
+    if (!match) return;
+    const n = parseInt(match[2], 10);
+    if (!best || n > best.n) best = { prefix: match[1], n, width: match[2].length };
+  });
+  return best ? best.prefix + String(best.n + 1).padStart(best.width, '0') : '';
 }
 
 function createLog() {
   openNewMissionSheet();
 }
 
-// The next sortie of this mission: same crew, aircraft, frequencies and search
-// area; times, Hobbs, entries, observations and results start empty.
 function addSortie() {
-  const current = activeLog();
-  if (!current.missionCreated) {
-    openNewMissionSheet();
-    return;
-  }
-  const placeholder = missionSorties(current).find(l => !l.started);
-  if (placeholder) {
-    placeholder.started = true;
-    if (!placeholder.sortie) placeholder.sortie = '1';
-    state.activeId = placeholder.id;
-    closeSheet();
-    activeTab = 'plan';
-    save();
-    render();
-    window.scrollTo(0, 0);
-    toast('Sortie 1 added · set up its crew, aircraft and search area');
-    return;
-  }
-  const source = current;
-  const sorties = missionSorties(source);
-  const log = blankLog();
-  log.missionId = source.missionId;
-  log.missionCreated = true;
-  log.started = true;
-  ['mission', 'base', 'capFlight', 'aircraft', 'callsign', 'sectional', 'grid', 'altitude', 'airspeed']
-    .forEach(key => { log[key] = source[key]; });
-  log.crew = deepClone(source.crew).map(m => Object.assign(m, { id: uid() }));
-  log.radio = deepClone(source.radio);
-  log.navAids = deepClone(source.navAids);
-  log.entry = deepClone(source.entry);
-  log.exit = deepClone(source.exit);
-  ['missionDate', 'reporter', 'reporterCapid', 'areaName'].forEach(key => { log.sar[key] = source.sar[key]; });
-  log.sar.corners = deepClone(source.sar.corners);
-  log.signoff.name = source.signoff.name;
-  log.signoff.capid = source.signoff.capid;
-  log.sortie = nextSortieNumber(sorties);
-  state.logs.push(log);
-  state.activeId = log.id;
-  closeSheet();
-  activeTab = 'plan';   // check the copied crew, aircraft and search area
-  save();
-  render();
-  window.scrollTo(0, 0);
-  toast(sortieLabel(log, sorties.length) + ' started · crew, aircraft and search area copied');
+  if (!activeMission()) { openNewMissionSheet(); return; }
+  openAddSortieSheet();
 }
 
 function deleteMission() {
-  const log = activeLog();
-  const sorties = missionSorties(log);
-  if (!confirm('Delete mission ' + (log.mission || '(no number)') + ' and its ' + sorties.length + ' sortie' +
+  const mission = activeMission();
+  if (!mission) return;
+  const sorties = missionSorties(mission.id);
+  if (!confirm('Delete mission ' + missionTitle(mission) + ' and its ' + sorties.length + ' sortie' +
     (sorties.length === 1 ? '' : 's') + '? This cannot be undone.')) return;
-  state.logs = state.logs.filter(l => l.missionId !== log.missionId);
-  if (!state.logs.length) state.logs.push(blankLog());
-  state.activeId = state.logs[state.logs.length - 1].id;
+  state.logs = state.logs.filter(l => l.missionId !== mission.id);
+  state.missions = state.missions.filter(m => m !== mission);
+  state.activeMissionId = (missionsInOrder()[0] || {}).id || '';
+  state.activeId = '';
   activeTab = 'logbook';
   closeSheet();
   save();
@@ -4138,29 +4404,27 @@ function deleteMission() {
 }
 
 function deleteLog() {
-  const log = activeLog();
+  const log = activeSortie();
+  if (!log) return;
   const sorties = missionSorties(log);
   const index = sorties.indexOf(log);
-  const what = sorties.length > 1
-    ? sortieLabel(log, index) + ' of ' + (log.mission || 'this mission')
-    : '“' + (log.mission || 'New Mission') + '”';
-  if (!confirm('Delete ' + what + ' and all of its entries? This cannot be undone.')) return;
+  if (!confirm('Delete ' + sortieLabel(log, index) + ' of ' + missionTitle(missionOf(log)) +
+    ' and all of its entries? This cannot be undone.')) return;
   state.logs.splice(state.logs.indexOf(log), 1);
-  if (!state.logs.length) state.logs.push(blankLog());
-  const sibling = sorties.find(other => other !== log);
-  state.activeId = (sibling || state.logs[0]).id;
+  const rest = sorties.filter(other => other !== log);
+  state.activeId = rest.length ? rest[rest.length - 1].id : '';
   closeSheet();
   activeTab = defaultTab();
   save();
   render();
-  toast(sorties.length > 1 ? 'Sortie deleted' : 'Mission deleted');
+  toast('Sortie deleted');
 }
 
 function sortieRowHTML(l, index) {
   const start = l.times.engineStart.time ? fmtZ(l.times.engineStart.time) : 'not started';
   return `<button type="button" class="log-row sortie-row ${l.id === state.activeId ? 'active' : ''}" data-act="switch-log" data-id="${esc(l.id)}">
     <span class="log-name">${esc(sortieLabel(l, index))}</span>
-    <span class="log-meta">${esc(l.aircraft || 'no tail')} · ${esc(start)} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
+    <span class="log-meta">${esc([l.sortieType, l.aircraft || 'no tail', start].filter(Boolean).join(' · '))} · ${l.entries.length} entr${l.entries.length === 1 ? 'y' : 'ies'}${l.receivedFrom ? ' · from ' + esc(l.receivedFrom) : ''}</span>
   </button>`;
 }
 
@@ -4170,12 +4434,11 @@ function sortieSheet() {
   const sorties = missionSorties(log);
   openSheet({
     title: 'Sorties',
-    sub: (log.mission || 'New Mission') + ' · ' + sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
+    sub: missionTitle(missionOf(log)) + ' · ' + sorties.length + ' sortie' + (sorties.length === 1 ? '' : 's'),
     body: `
       <div class="log-list">${sorties.map(sortieRowHTML).join('')}</div>
       <div class="sheet-note">
-        + Sortie starts the next sortie of this mission with the same crew, aircraft, frequencies and search
-        area. The mission number, base, mission date and your name and CAPID are shared by every sortie.
+        + Sortie adds the next sortie of this mission with the same crew, frequencies and search area.
         Send to crew shares this sortie by AirDrop; they save it to Files and use Menu → Import backup.
       </div>
     `,
@@ -4194,7 +4457,7 @@ function exportName(extension) {
   const log = activeLog();
   const d = new Date();
   const date = d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate());
-  return 'mission-log_' + slug(log.mission) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
+  return 'mission-log_' + slug(missionOf(log).number) + '_s' + slug(log.sortie) + '_' + date + '.' + extension;
 }
 
 async function shareFile(filename, blob) {
@@ -4243,6 +4506,7 @@ function exportJSON() {
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
+    missions: state.missions,
     logs: state.logs
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -4253,7 +4517,16 @@ function exportJSON() {
 /* One sortie, to hand to a crew member: share sheet → AirDrop, Messages, Mail.
    They save it to Files and use Menu → Import, where it joins their copy of
    the mission as its own sortie. */
+// Print, CSV and Send to crew are about the open sortie.
+function needSortie() {
+  if (activeSortie()) return true;
+  closeSheet();
+  toast(activeMission() ? 'Open a sortie first' : 'Pick or add a mission first');
+  return false;
+}
+
 function exportSortie() {
+  if (!needSortie()) return;
   const log = activeLog();
   if (sketchCtl) sketchCtl.flush();
   const payload = {
@@ -4262,6 +4535,7 @@ function exportSortie() {
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     from: log.signoff.name || crewNames(log, 'MO').split('; ')[0] || '',
+    missions: [missionOf(log)],
     logs: [log]
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -4276,14 +4550,15 @@ function csvCell(value) {
 }
 
 function exportCSV() {
+  if (!needSortie()) return;
   const log = activeLog();
-  const header = ['Mission', 'Sortie', 'Aircraft', 'Callsign', 'Time (Z)', 'Hobbs', 'Latitude (DD)', 'Longitude (DD)', 'Event', 'Remarks', 'GPS accuracy (m)'];
+  const header = ['Mission', 'Sortie', 'Tail No.', 'Call Sign', 'Time (Z)', 'Hobbs', 'Latitude (DD)', 'Longitude (DD)', 'Event', 'Remarks', 'GPS accuracy (m)'];
   const rows = [header];
   log.entries.forEach(entry => {
     const lat = parseLat(entry.lat);
     const lon = parseLon(entry.lon);
     rows.push([
-      log.mission, log.sortie, log.aircraft, log.callsign,
+      missionOf(log).number, log.sortie, log.aircraft, log.callsign,
       entry.time ? entry.time + 'Z' : '',
       entry.hobbs,
       lat == null ? '' : lat.toFixed(6),
@@ -4308,21 +4583,45 @@ function importBackupText(text) {
 
   if (!incoming || !incoming.length) throw new Error('No logs found in that file');
 
+  // Files from before 1.22.0 carry the mission on each log.
+  const { missions: inMissions, logs: rawLogs } = Array.isArray(data.missions)
+    ? { missions: data.missions.filter(m => m && typeof m === 'object').map(normalizeMission), logs: incoming }
+    : splitLegacyLogs(incoming);
+  if (!rawLogs.length && !inMissions.length) throw new Error('No sorties found in that file');
+
   const shared = data && data.kind === 'sortie';
-  const replacing = incoming.filter(raw => raw && state.logs.some(l => l.id === raw.id)).length;
+  const replacing = rawLogs.filter(raw => raw && state.logs.some(l => l.id === raw.id)).length;
   if (replacing && !confirm(replacing === 1 && shared
     ? 'This sortie is already on this iPad. Replace it with the copy in the file? Changes made here since it was shared will be lost.'
     : replacing + ' of these sorties are already on this iPad and will be replaced by the copies in the file. Continue?')) return;
 
+  // Each mission in the file joins the same mission here (by id, then by
+  // number), or is added.
+  const missionIdMap = {};
+  inMissions.forEach(mission => {
+    const key = String(mission.number || '').trim().toUpperCase();
+    const mine = state.missions.find(m => m.id === mission.id) ||
+      (key && state.missions.find(m => String(m.number || '').trim().toUpperCase() === key));
+    if (mine) {
+      missionIdMap[mission.id] = mine.id;
+      // a backup restores the mission's details; a crew member's sortie does not
+      if (!shared && mine.id === mission.id) Object.assign(mine, mission);
+    } else {
+      state.missions.push(mission);
+      missionIdMap[mission.id] = mission.id;
+    }
+  });
+
   let added = 0;
   let lastId = null;
-  incoming.forEach(raw => {
+  rawLogs.forEach(raw => {
     const log = normalizeLog(raw);
-    if (!log.missionId || !state.logs.some(l => l.missionId === log.missionId)) {
-      // join a mission here with the same number, if there is one
-      const key = String(log.mission || '').trim().toUpperCase();
-      const match = key && state.logs.find(l => String(l.mission || '').trim().toUpperCase() === key);
-      log.missionId = match ? match.missionId : (log.missionId || uid());
+    log.missionId = missionIdMap[log.missionId] || log.missionId;
+    if (!missionById(log.missionId)) {
+      const mission = blankMission();
+      if (log.missionId) mission.id = log.missionId;
+      else log.missionId = mission.id;
+      state.missions.push(mission);
     }
     if (shared && !state.logs.some(l => l.id === log.id)) {
       // a crew member's sortie: theirs to read, yours to sign
@@ -4341,8 +4640,13 @@ function importBackupText(text) {
   });
 
   if (shared && lastId) {
+    const log = state.logs.find(l => l.id === lastId);
+    state.activeMissionId = log.missionId;
     state.activeId = lastId;
     activeTab = defaultTab();
+  } else if (!activeMission()) {
+    state.activeMissionId = (missionsInOrder()[0] || {}).id || '';
+    state.activeId = '';
   }
   if (data.settings) {
     const { termsAccepted, termsAcceptedAt } = state.settings;
@@ -4351,7 +4655,7 @@ function importBackupText(text) {
   save();
   applyTheme();
   render();
-  toast('Imported ' + incoming.length + ' log' + (incoming.length === 1 ? '' : 's') +
+  toast('Imported ' + rawLogs.length + ' sortie' + (rawLogs.length === 1 ? '' : 's') +
     (added ? ' (' + added + ' new)' : ''));
 }
 
@@ -4379,6 +4683,7 @@ function importJSON() {
 }
 
 function printLog() {
+  if (!needSortie()) return;
   closeSheet();
 
   // iPadOS blocks window.print() inside a home-screen web app. On iOS (and
@@ -4494,7 +4799,7 @@ function buildPdfBlob() {
   const log = activeLog();
   const totals = timeTotals(log);
   const printed = fmtDateZ(new Date());
-  const mission = pdfSafe(log.mission || 'Untitled mission');
+  const mission = pdfSafe(missionOf(log).number || 'Untitled mission');
   const sortie = pdfSafe(log.sortie || '-');
   const aircraft = pdfSafe(log.aircraft || 'No tail');
 
@@ -4508,8 +4813,10 @@ function buildPdfBlob() {
   const coordText = (latRaw, lonRaw) => pdfCoordPair(latRaw, lonRaw) || '';
 
   const meta = [
-    ['Mission', mission], ['Sortie', sortie], ['Aircraft N#', aircraft], ['Callsign', pdfSafe(log.callsign)],
-    ['Base', pdfSafe(log.base)], ['CAP flight', pdfSafe(log.capFlight)], ['Sectional', pdfSafe(log.sectional)], ['Grid', pdfSafe(log.grid)],
+    ['Mission / symbol', mission + (missionOf(log).symbol ? ' / ' + pdfSafe(missionOf(log).symbol) : '')], ['Sortie', sortie],
+    ['Sortie type', pdfSafe(log.sortieType)], ['Tail No.', aircraft],
+    ['Call sign', pdfSafe(log.callsign)], ['Dep. / Dest.', pdfSafe([log.depAirport, log.destAirport].filter(Boolean).join(' - '))],
+    ['Sectional', pdfSafe(log.sectional)], ['Grid', pdfSafe(log.grid)],
     ['Altitude', pdfSafe(log.altitude)], ['Airspeed', pdfSafe(log.airspeed)], ['Entry point', coordText(log.entry.lat, log.entry.lon)], ['Exit point', coordText(log.exit.lat, log.exit.lon)],
     ['Main radio', pdfSafe(log.radio.main)], ['Guard radio', pdfSafe(log.radio.guard)], ['ATIS / AWOS', pdfSafe(log.radio.atis)], ['CTAF', pdfSafe(log.radio.ctaf)]
   ];
@@ -4577,7 +4884,7 @@ function buildPdfBlob() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(navy[0], navy[1], navy[2]);
-  doc.text('FLIGHT TIMES', M, y + 7);
+  doc.text('TIMES', M, y + 7);
   doc.text('TOTALS', 350, y + 7);
 
   const leftW = 300;
@@ -4616,7 +4923,7 @@ function buildPdfBlob() {
 
   const totalsData = [
     ['Flight time', fmtDuration(totals.flight)],
-    ['Engine run', fmtDuration(totals.engine)],
+    ['ATA - ATD', fmtDuration(totals.engine)],
     ['Total tach', totals.tach == null ? '-' : fmtDecimal(totals.tach, 1)],
     ['Hobbs used', totals.hobbs == null ? '-' : fmtDecimal(totals.hobbs, 1)]
   ];
@@ -4653,7 +4960,7 @@ function buildPdfBlob() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
   doc.setTextColor(navy[0], navy[1], navy[2]);
-  doc.text('FLIGHT LOG', M, y + 7);
+  doc.text('SORTIE LOG', M, y + 7);
 
   const logRows = log.entries.map(entry => [
     entry.time ? entry.time + 'Z' : '',
@@ -4761,6 +5068,40 @@ function buildPdfBlob() {
   ]);
 
   let ny = 88;
+
+  const wmirs = wmirsReport(log);
+  if (wmirs.length) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(navy[0], navy[1], navy[2]);
+    doc.text('WMIRS BRIEF & DEBRIEF', M, ny + 6);
+    ny += 13;
+    const labelW = 112;
+    wmirs.forEach(([label, value]) => {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      const lines = doc.splitTextToSize(pdfSafe(value), CW - labelW - 10);
+      const rowH = Math.max(14, lines.length * 9.4 + 5);
+      if (ny + rowH > H - 50) {
+        doc.addPage();
+        pdfHeader(doc, 'Notes & Observations', mission + ' · Sortie ' + sortie + ' · ' + aircraft, ['Printed ' + printed]);
+        ny = 88;
+      }
+      doc.setDrawColor(170, 185, 198);
+      doc.setLineWidth(0.5);
+      doc.rect(M, ny, CW, rowH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.4);
+      doc.setTextColor(grey[0], grey[1], grey[2]);
+      doc.text(label.toUpperCase(), M + 4, ny + 9);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(dark[0], dark[1], dark[2]);
+      doc.text(lines, M + labelW, ny + 9.5);
+      ny += rowH;
+    });
+    ny += 10;
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7);
@@ -5045,12 +5386,12 @@ function buildPrint() {
     </table>`;
 
   const headerCells = [
-    cell('Mission', log.mission),
+    cell('Mission / symbol', [missionOf(log).number, missionOf(log).symbol].filter(Boolean).join(' / ')),
     cell('Sortie', log.sortie),
-    cell('Aircraft N#', log.aircraft),
-    cell('Callsign', log.callsign),
-    cell('Base', log.base),
-    cell('CAP flight', log.capFlight),
+    cell('Sortie type', log.sortieType),
+    cell('Tail No.', log.aircraft),
+    cell('Call sign', log.callsign),
+    cell('Dep. / Dest.', [log.depAirport, log.destAirport].filter(Boolean).join(' – ')),
     cell('Sectional', log.sectional),
     cell('Grid', log.grid),
     cell('Altitude', log.altitude),
@@ -5142,7 +5483,7 @@ function buildPrint() {
 
       <div class="p-cols">
         <div class="p-section" style="margin-top:0">
-          <div class="p-section-title">Flight times</div>
+          <div class="p-section-title">Times</div>
           <table class="p-table p-times">
             <thead><tr><th>Event</th><th class="c">Time (Z)</th><th class="c">Hobbs</th></tr></thead>
             <tbody>${timesRows}</tbody>
@@ -5152,7 +5493,7 @@ function buildPrint() {
           <div class="p-section-title">Totals</div>
           <div class="p-totals">
             <div class="p-total"><div class="tl">Flight time</div><div class="tv">${fmtDuration(totals.flight)}</div></div>
-            <div class="p-total"><div class="tl">Engine run</div><div class="tv">${fmtDuration(totals.engine)}</div></div>
+            <div class="p-total"><div class="tl">ATA − ATD</div><div class="tv">${fmtDuration(totals.engine)}</div></div>
             <div class="p-total"><div class="tl">Total tach</div><div class="tv">${totals.tach == null ? '—' : fmtDecimal(totals.tach, 1)}</div></div>
             <div class="p-total"><div class="tl">Hobbs used</div><div class="tv">${totals.hobbs == null ? '—' : fmtDecimal(totals.hobbs, 1)}</div></div>
           </div>
@@ -5161,7 +5502,7 @@ function buildPrint() {
       </div>
 
       <div class="p-section">
-        <div class="p-section-title">Flight log</div>
+        <div class="p-section-title">Sortie log</div>
         <table class="p-table">
           <thead><tr>
             <th style="width:9%">Time</th>
@@ -5184,7 +5525,7 @@ function buildPrint() {
       </div>
 
       <div class="p-footer">
-        <span>Observer Mission Log · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
+        <span>Observer Mission Log · ${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
         <span>Sortie record</span>
       </div>
     </section>
@@ -5195,13 +5536,19 @@ function buildPrint() {
           <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">Notes &amp; Observations</div>
-            <div class="p-sub">${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')} · ${esc(log.aircraft || 'No tail')}</div>
+            <div class="p-sub">${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')} · ${esc(log.aircraft || 'No tail')}</div>
           </div>
         </div>
         <div class="p-head-right"><b>Printed</b> ${esc(printDate)}</div>
       </div>
 
-      <div class="p-section" style="margin-top:0">
+      ${wmirsReport(log).length ? `<div class="p-section" style="margin-top:0">
+        <div class="p-section-title">WMIRS brief &amp; debrief</div>
+        <table class="p-table p-wmirs"><tbody>${wmirsReport(log).map(([label, value]) =>
+          `<tr><td class="lbl">${esc(label)}</td><td class="remark">${esc(value)}</td></tr>`).join('')}</tbody></table>
+      </div>` : ''}
+
+      <div class="p-section"${wmirsReport(log).length ? '' : ' style="margin-top:0"'}>
         <div class="p-section-title">Notes / sketches</div>
         <div class="p-notes-text">${esc(log.notes || '')}</div>
         ${sketchSource ? `<div class="p-sketch"><img src="${sketchSource}" alt="Sketch"></div>` : ''}
@@ -5235,7 +5582,7 @@ function buildPrint() {
       </div>
 
       <div class="p-footer">
-        <span>Observer Mission Log · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
+        <span>Observer Mission Log · ${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
         <span>Notes &amp; observations</span>
       </div>
     </section>
@@ -5254,7 +5601,7 @@ function sarPrintPage(log, printDate) {
           <img class="p-emblem" src="icons/emblem.png" alt="">
           <div>
             <div class="p-title">SAR Results Worksheet</div>
-            <div class="p-sub">CAPF 104a · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</div>
+            <div class="p-sub">CAPF 104a · ${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</div>
           </div>
         </div>
         <div class="p-head-right"><div><b>Printed</b> ${esc(printDate)}</div></div>
@@ -5287,7 +5634,7 @@ function sarPrintPage(log, printDate) {
       </div>
 
       <div class="p-footer">
-        <span>Observer Mission Log · ${esc(log.mission || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
+        <span>Observer Mission Log · ${esc(missionOf(log).number || 'Untitled mission')} · Sortie ${esc(log.sortie || '—')}</span>
         <span>SAR results worksheet</span>
       </div>
     </section>`;
@@ -5316,31 +5663,31 @@ const actions = {
     render();
     toast('Find the steps later under Menu → Help & install');
   },
-  'edit-mission': () => {
-    if (!activeLog().missionCreated) { openNewMissionSheet(); return; }
-    openMissionSheet();
+  'edit-mission': () => openMissionSheet(),
+  'toggle-mission-closed': () => {
+    const mission = activeMission();
+    if (!mission) return;
+    mission.closed = !mission.closed;
+    mission.updatedAt = Date.now();
+    save();
+    closeSheet();
+    render();
+    toast('Mission ' + missionTitle(mission) + (mission.closed ? ' closed' : ' reopened'));
   },
   'show-missions': () => switchTab('logbook'),
   'open-mission': el => {
-    const sorties = state.logs.filter(l => l.missionId === el.dataset.id).sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
-    if (!sorties.length) return;
-    state.activeId = sorties[sorties.length - 1].id;
+    if (!missionById(el.dataset.id)) return;
+    const sorties = missionSorties(el.dataset.id);
+    state.activeMissionId = el.dataset.id;
+    state.activeId = sorties.length ? sorties[sorties.length - 1].id : '';
     save();
     switchTab('logbook');
-  },
-  // From the active mission: the first sortie's form on Sorties, or the next sortie
-  'start-sortie': () => {
-    if (missionSorties().some(l => l.started)) { addSortie(); return; }
-    switchTab('plan');
-    const card = $('#new-sortie-card');
-    if (card) card.scrollIntoView({ block: 'start' });
-    const tail = $('#new-sortie-card [data-bind="aircraft"]');
-    if (tail) setTimeout(() => tail.focus(), 60);
   },
   'del-mission': () => deleteMission(),
   'new-mission': () => openNewMissionSheet(),
   'nm-save': () => saveNewMission(),
   'nm-today': () => { const d = $('#nm-date'); if (d) d.value = todayMissionDate(); },
+  'ns-save': () => saveAddSortie(),
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
     const card = $('#ops-card');
@@ -5526,15 +5873,7 @@ const actions = {
   },
   'switch-log': el => switchLog(el.dataset.id),
   'new-log': () => createLog(),
-  'add-sortie': el => {
-    // from the Logbook: the sortie goes on that mission
-    if (el && el.dataset.mission) {
-      const mine = state.logs.filter(l => l.missionId === el.dataset.mission)
-        .sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
-      if (mine.length) state.activeId = mine[mine.length - 1].id;
-    }
-    addSortie();
-  },
+  'add-sortie': () => addSortie(),
   'add-crew': el => {
     const log = activeLog();
     log.crew.push(crewMember(el.dataset.role));
@@ -5631,13 +5970,13 @@ const actions = {
       if (activeTab === 'plan') render();
     });
   },
-  'sar-today': () => {
+  'mission-today': () => {
     // The local calendar date, as it would be written on the paper form.
-    const value = todayMissionDate();
-    activeLog().sar.missionDate = value;
-    syncMissionField(activeLog(), 'sar.missionDate');
-    const input = $('[data-bind="sar.missionDate"]');
-    if (input) input.value = value;
+    const mission = activeMission();
+    if (!mission) return;
+    mission.date = todayMissionDate();
+    const input = $('[data-bind="m.date"]');
+    if (input) input.value = mission.date;
     save();
   },
   'sar-choice': el => {
@@ -5688,14 +6027,11 @@ const actions = {
 
 function switchTab(tab) {
   if (!TABS.includes(tab)) return;
-  // Sorties opens once a mission is picked; the rest once it has a sortie.
-  if (tab === 'plan' && !activeLog().missionCreated) {
-    toast('Pick or add a mission first');
-    return;
-  }
-  if (tab !== 'plan' && tab !== 'logbook' && !sortieReady()) {
-    tab = activeLog().missionCreated ? 'plan' : 'logbook';
-    toast(activeLog().missionCreated ? 'Add the first sortie to open its tabs' : 'Pick or add a mission first');
+  // Brief…Sign are about one sortie: they open once one is.
+  if (tab !== 'logbook' && !activeSortie()) {
+    toast(activeMission() ? 'Add or pick a sortie first' : 'Pick or add a mission first');
+    if (activeTab === 'logbook') return;
+    tab = 'logbook';
   }
   if (sketchCtl) sketchCtl.flush();
   if (sigCtl) sigCtl.flush();
@@ -5738,14 +6074,21 @@ document.addEventListener('input', event => {
     return;
   }
 
-  if (path.startsWith('settings.')) setPath(state, path, el.value);
-  else {
-    setPath(activeLog(), path, el.value);
-    syncMissionField(activeLog(), path);
+  const value = el.type === 'checkbox' ? el.checked : el.value;
+  if (path.startsWith('settings.')) setPath(state, path, value);
+  else if (path.startsWith('m.')) {
+    // the picked mission's own fields, from Mission details
+    const mission = activeMission();
+    if (!mission) return;
+    setPath(mission, path.slice(2), value);
+    mission.updatedAt = Date.now();
+  } else {
+    setPath(activeLog(), path, value);
   }
 
   if (el.matches('[data-coord]')) updateCoordHelp(el);
-  if (/^(mission|sortie|aircraft|callsign|crew\.)/.test(path)) renderStrip();
+  if (el.matches('textarea[maxlength]')) updateCharCount(el);
+  if (/^(m\.number|sortie|aircraft|callsign|crew\.)/.test(path)) renderStrip();
 
   save();
 });

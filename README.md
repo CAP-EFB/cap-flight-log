@@ -8,26 +8,33 @@ two-page mission log to PDF (long logs can add a continuation page).
 
 ## What it does
 
-The tabs follow a sortie from briefing to signature: **Missions → Sorties → Fly → Notes → Debrief → Sign**.
+It follows WMIRS: a **mission** (Mission No., Name and Symbol, e.g. 27-T-3852 / A31) holds **air
+sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie from brief to signature:
+**Brief → Fly → Notes → Debrief → Sign**.
 
-- **Missions** — the first tab: the active mission at the top, with its sorties and a button to add
-  one (which opens Sorties with the new-sortie form), then the previous missions and totals (sorties,
-  Hobbs, tracked distance). Tapping a previous mission makes it the active one. The + button adds a
-  mission from WMIRS (number required; date and base optional).
-- **Missions and sorties** — a mission holds one or more sorties. On Sorties, the + button (or the
-  header's sortie switcher, or Menu → + Sortie) starts the next sortie with the same crew, aircraft,
-  frequencies and search area; mission number, base, mission date and your name and CAPID are shared
-  by every sortie. Fly, Notes, Debrief and Sign open once the mission has a sortie.
-- **Sorties** — mission and sortie, crew, flight profile, the search area (corners, entry and exit points,
-  ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a), frequencies and nav aids.
+- **Missions** — the first tab: the picked mission at the top with its sorties and + Add sortie, then the
+  previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it. The +
+  button adds a mission from WMIRS (number required; symbol, name, date and base optional). Mission
+  details can close a mission once it is closed in WMIRS.
+- **Adding a sortie** — the WMIRS Air Sortie Add/Edit fields: Sortie No. (the next one is suggested),
+  Sortie Type (the WMIRS list), Tail No., Call Sign, Dep. and Dest. Airport. A mission's next sortie
+  copies the crew, frequencies, nav aids and search area from its last one. Brief…Sign open once a
+  sortie is open.
+- **Brief** — the sortie's WMIRS fields, crew (MP, MO, MS, AP, RO, PAX), Sortie Objectives, Sortie
+  Deliverables and Route Of Flight from the WMIRS brief, flight profile, the search area (corners, entry
+  and exit points, ForeFlight FPL import), the planned column of the SAR worksheet (CAPF 104a),
+  frequencies (including Air/Ground, Air/Air and base) and nav aids.
 - **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
   Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
   next-due reminder.
 - **Notes** — free text plus a graph-paper sketch pad for Apple Pencil or a finger.
 - **Flight track** — recorded from Engine Start to Shut Down (in the iPad app also in the background), shown
   on the chart and on Debrief, and exportable as GPX.
-- **Debrief** — flight times and totals, Hobbs and tach end/start/total with Hobbs split into In Area and
-  To/From, the actual column of the SAR worksheet, effectiveness, visibility and crew remarks.
+- **Debrief** — in the order of the WMIRS Air Sortie Debrief: Flight Plan Closed, ATD/ATA (Engine Start
+  and Shut Down) and the checkpoint times, Hobbs and tach end/start/total with Hobbs In Area and To/From,
+  fuel and oil used, cost and receipt #, then Summary, Results/Deliverables, Weather Conditions and Remarks
+  (with WMIRS's character limits), Sortie Effectiveness and the reason if not successful. The CAPF 104a
+  actual column and search effectiveness follow.
 - **Sign** — printed name, CAPID, UTC date/time, a signature pad and Share signed log (PDF).
 - **GPS** — live position, accuracy, CAP sectional grid and lat/long cell in the header. Switch Live GPS
   off in Settings to save battery.
@@ -36,7 +43,7 @@ The tabs follow a sortie from briefing to signature: **Missions → Sorties → 
   backup; it joins their copy of the mission (matched by mission number) as its own sortie, with the
   sign-off left for them to complete.
 - **Output** — Print / Save PDF. On iPad this builds a PDF and opens the share sheet (Save to Files or
-  Print); on a computer it uses the browser print dialog. Also JSON backup/import and a flight-log CSV.
+  Print); on a computer it uses the browser print dialog. The PDF includes the WMIRS brief and debrief fields. Also JSON backup/import and a sortie-log CSV.
 - **Disclaimer & terms** — shown on first use and must be accepted to continue; available afterwards
   from the menu.
 - **Feedback** — Menu → Send feedback opens the feedback form (https://forms.gle/EBEkXN8LNWNPL8VG7).
