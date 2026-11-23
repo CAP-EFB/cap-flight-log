@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.35.1';
+const APP_VERSION = '1.36.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -912,7 +912,7 @@ function openMapDb() {
     mapDbPromise = new Promise(resolve => {
       let req;
       try {
-        req = indexedDB.open(MAP_DB, 1);
+        req = indexedDB.open(MAP_DB, 2);
       } catch (_) {
         resolve(null);
         return;
@@ -921,6 +921,7 @@ function openMapDb() {
         const db = req.result;
         if (!db.objectStoreNames.contains('tiles')) db.createObjectStore('tiles');
         if (!db.objectStoreNames.contains('areas')) db.createObjectStore('areas');
+        if (!db.objectStoreNames.contains('aviation')) db.createObjectStore('aviation');   // FAA data by 1° square
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
@@ -1277,6 +1278,8 @@ async function saveOfflineMap(log, layer) {
     return;
   }
   await recordArea(log, layer, shape, keys, bytes, job.missing);
+  // airspace, airports and navaids for the same area, for Topo and Terrain with no signal
+  await saveAviationFor(shape).catch(err => console.warn('[aviation]', err));
   toast(CHART_LAYERS[layer].label + ' map saved for offline use · ' + fmtBytes(bytes) +
     (job.missing ? ' · ' + job.missing + (job.missing === 1 ? ' tile' : ' tiles') + ' missing, Save again to retry' : ''));
 }
@@ -1415,52 +1418,9 @@ function mountFlyMap() {
     zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 15, zoomSnap: 1
   }).setView(center, fix ? chartFullZoom() : 5);
   const tiles = chartTileLayer(chartLayerKey()).addTo(map);
-  // CAP grid over the chart: 15-minute grid lines with their numbers, and the
-  // 7.5-minute quarters dashed when zoomed in. Redrawn for what is on screen.
-  const gridLayer = L.layerGroup().addTo(map);
-  const drawGrid = () => {
-    gridLayer.clearLayers();
-    const zoom = map.getZoom();
-    if (zoom < 7) return;
-    const b = map.getBounds();
-    const step = 0.25;
-    const quarter = zoom >= 10;
-    CAP_SECTIONALS.forEach(([id, north, south, westW, eastW]) => {
-      const west = -westW;
-      const east = -eastW;
-      const s0 = Math.max(south, b.getSouth()), n0 = Math.min(north, b.getNorth());
-      const w0 = Math.max(west, b.getWest()), e0 = Math.min(east, b.getEast());
-      if (s0 >= n0 || w0 >= e0) return;
-      const lines = [];
-      const inc = quarter ? step / 2 : step;
-      for (let lat = Math.ceil(s0 / inc) * inc; lat <= n0 + 1e-9; lat += inc) {
-        const major = Math.abs(lat / step - Math.round(lat / step)) < 1e-6;
-        lines.push([[[lat, w0], [lat, e0]], major]);
-      }
-      for (let lon = Math.ceil(w0 / inc) * inc; lon <= e0 + 1e-9; lon += inc) {
-        const major = Math.abs(lon / step - Math.round(lon / step)) < 1e-6;
-        lines.push([[[s0, lon], [n0, lon]], major]);
-      }
-      lines.forEach(([pts, major]) => L.polyline(pts, {
-        color: '#7a1fa2', weight: major ? 1.6 : 0.8, opacity: major ? 0.85 : 0.6,
-        dashArray: major ? null : '4 4', interactive: false
-      }).addTo(gridLayer));
-      if (zoom < 9) return;
-      // a number in each 15-minute grid, using the CAP rule for overlapping charts
-      for (let top = Math.ceil(s0 / step) * step + step; top <= n0 + 1e-9; top += step) {
-        for (let left = Math.floor(w0 / step) * step; left < e0 - 1e-9; left += step) {
-          const name = capGridName(top - 0.01, left + 0.01);
-          if (!name || !name.startsWith(id + ' ')) continue;
-          L.marker([top - step / 2, left + step / 2], {
-            interactive: false,
-            icon: L.divIcon({ className: 'grid-label', html: esc(name.replace(/ [ABCD]$/, '')), iconSize: null })
-          }).addTo(gridLayer);
-        }
-      }
-    });
-  };
-  map.on('moveend', drawGrid);
-  drawGrid();
+  // the CAP grid over every chart; airspace, airports and navaids over Topo and Terrain
+  capGridLayer(map);
+  const aviation = chartNeedsAviation(chartLayerKey()) ? aviationLayer(map) : null;
 
   // the sortie's search area, when its corners are set
   const corners = ['nw', 'ne', 'se', 'sw'].map(key => {
@@ -1475,7 +1435,7 @@ function mountFlyMap() {
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, tiles, dot, accuracy, follow: !!fix, logId: log.id, trackLine: null, checkpoints: null, plan: null, tail: null,
+  positionMap = { map, tiles, aviation, dot, accuracy, follow: !!fix, logId: log.id, trackLine: null, checkpoints: null, plan: null, tail: null,
     remove: () => map.remove() };
   // with no position yet, show the flight so far, the plan or the search area
   drawTrackOnMap(!fix);
@@ -1756,6 +1716,249 @@ function setFlyLog(open, snap) {
   document.addEventListener('pointerup', end);
   document.addEventListener('pointercancel', end);
 })();
+
+/* ---------- the CAP grid as a map layer ----------
+   15-minute grid lines with their numbers, and the 7.5-minute quarters
+   dashed when zoomed in, redrawn for what is on screen once the map stops
+   moving. Used on Fly's chart and on the sketch pad's maps. */
+function capGridLayer(map) {
+  const layer = L.layerGroup().addTo(map);
+  let timer = null;
+  const draw = () => {
+    layer.clearLayers();
+    const zoom = map.getZoom();
+    if (zoom < 7) return;
+    const b = map.getBounds();
+    const step = 0.25;
+    const quarter = zoom >= 10;
+    CAP_SECTIONALS.forEach(([id, north, south, westW, eastW]) => {
+      const west = -westW;
+      const east = -eastW;
+      const s0 = Math.max(south, b.getSouth()), n0 = Math.min(north, b.getNorth());
+      const w0 = Math.max(west, b.getWest()), e0 = Math.min(east, b.getEast());
+      if (s0 >= n0 || w0 >= e0) return;
+      const lines = [];
+      const inc = quarter ? step / 2 : step;
+      for (let lat = Math.ceil(s0 / inc) * inc; lat <= n0 + 1e-9; lat += inc) {
+        const major = Math.abs(lat / step - Math.round(lat / step)) < 1e-6;
+        lines.push([[[lat, w0], [lat, e0]], major]);
+      }
+      for (let lon = Math.ceil(w0 / inc) * inc; lon <= e0 + 1e-9; lon += inc) {
+        const major = Math.abs(lon / step - Math.round(lon / step)) < 1e-6;
+        lines.push([[[s0, lon], [n0, lon]], major]);
+      }
+      lines.forEach(([pts, major]) => L.polyline(pts, {
+        color: '#7a1fa2', weight: major ? 1.6 : 0.8, opacity: major ? 0.85 : 0.6,
+        dashArray: major ? null : '4 4', interactive: false
+      }).addTo(layer));
+      if (zoom < 9) return;
+      // a number in each 15-minute grid, using the CAP rule for overlapping charts
+      for (let top = Math.ceil(s0 / step) * step + step; top <= n0 + 1e-9; top += step) {
+        for (let left = Math.floor(w0 / step) * step; left < e0 - 1e-9; left += step) {
+          const name = capGridName(top - 0.01, left + 0.01);
+          if (!name || !name.startsWith(id + ' ')) continue;
+          L.marker([top - step / 2, left + step / 2], {
+            interactive: false,
+            icon: L.divIcon({ className: 'grid-label', html: esc(name.replace(/ [ABCD]$/, '')), iconSize: null })
+          }).addTo(layer);
+        }
+      }
+    });
+  };
+  // the sketch pad's map moves every frame while PencilKit pans it: draw once it settles
+  map.on('moveend', () => { clearTimeout(timer); timer = setTimeout(draw, 120); });
+  draw();
+  return layer;
+}
+
+/* ---------- aviation data on Topo and Terrain ----------
+   The sectional prints airspace, airports and navaids; the topographic and
+   terrain maps do not, so they get them from the FAA's own open data (the
+   Aeronautical Data Delivery Service, the same FAA account as the sectional
+   tiles): Class B, C, D and surface E airspace, special use airspace,
+   airports, navaids, and low-altitude reporting points and waypoints. The
+   data comes in 1° squares, is kept on the iPad (and saved with offline
+   maps), and is fetched again after 28 days when there is a connection. */
+const FAA_DATA = 'https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/';
+const AVIATION_MAX_AGE = 28 * 86400000;
+const AVIATION_QUERIES = {
+  airspace: ['Class_Airspace', "CLASS IN ('B','C','D') OR LOCAL_TYPE='CLASS_E2'", 'CLASS,LOCAL_TYPE,NAME,IDENT,UPPER_VAL,UPPER_CODE,LOWER_VAL,LOWER_CODE', true],
+  sua: ['Special_Use_Airspace', "TYPE_CODE IN ('R','P','W','A','MOA')", 'NAME,TYPE_CODE,UPPER_VAL,UPPER_CODE,LOWER_VAL,LOWER_CODE', true],
+  airports: ['US_Airport', "TYPE_CODE IN ('AD','SP') AND OPERSTATUS='OPERATIONAL'", 'IDENT,ICAO_ID,NAME,ELEVATION,PRIVATEUSE,TYPE_CODE', false],
+  navaids: ['NAVAIDSystem', '1=1', 'IDENT,NAME_TXT,CLASS_TXT', false],
+  points: ['DesignatedPoints', "US_LOW=1 AND TYPE_CODE IN ('RPT','WPT')", 'IDENT,TYPE_CODE', false]
+};
+const aviationCells = {};     // "lat,lon" → { at, data } in memory
+const aviationLoading = {};
+
+async function fetchAviationCell(lat, lon) {
+  const bbox = [lon, lat, lon + 1, lat + 1].join(',');
+  const data = {};
+  await Promise.all(Object.entries(AVIATION_QUERIES).map(async ([key, [svc, where, fields, shape]]) => {
+    const url = FAA_DATA + svc + '/FeatureServer/0/query?where=' + encodeURIComponent(where) +
+      '&geometry=' + bbox + '&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects' +
+      '&outFields=' + fields + '&outSR=4326&f=geojson&resultRecordCount=2000' +
+      (shape ? '&maxAllowableOffset=0.0015&geometryPrecision=4' : '');
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error('FAA data ' + res.status);
+    const json = await res.json();
+    if (json.error) throw new Error('FAA data ' + (json.error.message || ''));
+    data[key] = json.features || [];
+  }));
+  return data;
+}
+
+// One 1° square: from memory, from the iPad, or from the FAA.
+async function aviationCell(lat, lon, refresh) {
+  const key = lat + ',' + lon;
+  const fresh = c => c && Date.now() - c.at < AVIATION_MAX_AGE;
+  if (!refresh && fresh(aviationCells[key])) return aviationCells[key].data;
+  if (aviationLoading[key]) return aviationLoading[key];
+  aviationLoading[key] = (async () => {
+    let stored = aviationCells[key];
+    if (!stored) {
+      try {
+        const db = await openMapDb();
+        stored = db && await idbReq(db.transaction('aviation').objectStore('aviation').get(key));
+      } catch (_) { stored = null; }
+    }
+    if (!refresh && fresh(stored)) { aviationCells[key] = stored; return stored.data; }
+    if (navigator.onLine !== false) {
+      try {
+        const data = await fetchAviationCell(lat, lon);
+        const rec = { at: Date.now(), data };
+        aviationCells[key] = rec;
+        mapTx(['aviation'], 'readwrite', s => s.put(rec, key)).catch(() => {});
+        return data;
+      } catch (err) {
+        console.warn('[aviation]', err);
+      }
+    }
+    // offline or the FAA unreachable: whatever was kept, however old
+    if (stored) { aviationCells[key] = stored; return stored.data; }
+    return null;
+  })();
+  try { return await aviationLoading[key]; } finally { delete aviationLoading[key]; }
+}
+
+// The 1° squares a box covers.
+function aviationCellsFor(south, west, north, east) {
+  const cells = [];
+  for (let lat = Math.floor(south); lat <= Math.floor(north); lat++) {
+    for (let lon = Math.floor(west); lon <= Math.floor(east); lon++) cells.push([lat, lon]);
+  }
+  return cells;
+}
+
+function altText(val, code) {
+  if (code === 'SFC' || (val === 0 && code !== 'MSL')) return 'SFC';
+  if (val == null || val === '') return '';
+  return Math.round(Number(val) / 100) + (code === 'AGL' ? ' AGL' : '');
+}
+
+const AIRSPACE_STYLE = {
+  B: { color: '#1f5fbf', weight: 2.6, dashArray: null, fillOpacity: 0.04 },
+  C: { color: '#a8287d', weight: 2.6, dashArray: null, fillOpacity: 0.04 },
+  D: { color: '#1f5fbf', weight: 1.8, dashArray: '8 5', fillOpacity: 0.02 },
+  E2: { color: '#a8287d', weight: 1.5, dashArray: '6 5', fillOpacity: 0 },
+  SUA: { color: '#2f6fb3', weight: 2, dashArray: '2 6', fillOpacity: 0.06 },
+  MOA: { color: '#a8287d', weight: 2, dashArray: '2 6', fillOpacity: 0.04 }
+};
+
+/* The aviation layer on a map: drawn from the squares in view, again when the
+   map settles; names and points appear as the chart is zoomed in. */
+function aviationLayer(map) {
+  const layer = L.layerGroup().addTo(map);
+  const renderer = L.canvas({ padding: 0.3 });
+  let drawn = '';
+  let timer = null;
+  let alive = true;
+  const draw = async () => {
+    if (!alive) return;
+    const zoom = Math.floor(map.getZoom());
+    if (zoom < 7) { layer.clearLayers(); drawn = ''; return; }
+    const b = map.getBounds().pad(0.2);
+    const cells = aviationCellsFor(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()).slice(0, 12);
+    const key = cells.map(c => c.join(',')).join('|') + '@' + Math.min(zoom, 12);
+    if (key === drawn) return;
+    const sets = await Promise.all(cells.map(([lat, lon]) => aviationCell(lat, lon)));
+    if (!alive) return;
+    drawn = key;
+    layer.clearLayers();
+    const seen = new Set();
+    const once = f => {
+      const id = (f.properties && (f.properties.IDENT || f.properties.NAME)) + '|' + JSON.stringify(f.geometry && f.geometry.coordinates).slice(0, 40);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    };
+    sets.filter(Boolean).forEach(data => {
+      (data.sua || []).filter(once).forEach(f => {
+        const p = f.properties;
+        L.geoJSON(f, { renderer, interactive: false, style: Object.assign({ fill: true, fillColor: (p.TYPE_CODE === 'MOA' ? AIRSPACE_STYLE.MOA : AIRSPACE_STYLE.SUA).color }, p.TYPE_CODE === 'MOA' ? AIRSPACE_STYLE.MOA : AIRSPACE_STYLE.SUA) }).addTo(layer);
+      });
+      (data.airspace || []).filter(once).forEach(f => {
+        const p = f.properties;
+        const cls = p.LOCAL_TYPE === 'CLASS_E2' ? 'E2' : p.CLASS;
+        const style = AIRSPACE_STYLE[cls];
+        if (!style) return;
+        L.geoJSON(f, { renderer, interactive: false, style: Object.assign({ fill: style.fillOpacity > 0, fillColor: style.color }, style) }).addTo(layer);
+      });
+    });
+    // points: airports and navaids from zoom 8 (named from 9), waypoints from 10
+    sets.filter(Boolean).forEach(data => {
+      (data.airports || []).filter(once).forEach(f => {
+        const p = f.properties;
+        const priv = Number(p.PRIVATEUSE) === 1;
+        if (priv && zoom < 11) return;
+        if (!priv && zoom < 8) return;
+        const [lon, lat] = f.geometry.coordinates;
+        const label = zoom >= (priv ? 12 : 9) ? `<span>${esc(p.IDENT || '')}</span>` : '';
+        L.marker([lat, lon], { interactive: false, keyboard: false,
+          icon: L.divIcon({ className: 'av-apt' + (priv ? ' private' : '') + (p.TYPE_CODE === 'SP' ? ' sea' : ''), html: '<i></i>' + label, iconSize: null }) }).addTo(layer);
+      });
+      (data.navaids || []).filter(once).forEach(f => {
+        if (zoom < 8) return;
+        const [lon, lat] = f.geometry.coordinates;
+        const p = f.properties;
+        L.marker([lat, lon], { interactive: false, keyboard: false,
+          icon: L.divIcon({ className: 'av-nav', html: '<i></i>' + (zoom >= 9 ? `<span>${esc(p.IDENT || '')}</span>` : ''), iconSize: null }) }).addTo(layer);
+      });
+      if (zoom >= 10) {
+        (data.points || []).filter(once).forEach(f => {
+          const [lon, lat] = f.geometry.coordinates;
+          L.marker([lat, lon], { interactive: false, keyboard: false,
+            icon: L.divIcon({ className: 'av-fix' + (f.properties.TYPE_CODE === 'RPT' ? ' rpt' : ''), html: '<i></i>' + (zoom >= 11 ? `<span>${esc(f.properties.IDENT || '')}</span>` : ''), iconSize: null }) }).addTo(layer);
+        });
+      }
+    });
+  };
+  const onMove = () => { clearTimeout(timer); timer = setTimeout(() => draw().catch(err => console.warn('[aviation]', err)), 150); };
+  map.on('moveend', onMove);
+  onMove();
+  layer.stop = () => { alive = false; clearTimeout(timer); map.off('moveend', onMove); layer.remove(); };
+  return layer;
+}
+
+// The maps that need aviation data drawn over them: the sectional has its own.
+function chartNeedsAviation(bg) {
+  return bg === 'topo' || bg === 'terrain';
+}
+
+// Keep a sortie's area of aviation data on the iPad (with its offline maps).
+async function saveAviationFor(shape) {
+  const pts = [];
+  shape.boxes.forEach(b => { pts.push([b.south, b.west], [b.north, b.east]); });
+  shape.points.forEach(p => pts.push(p));
+  shape.route.forEach(p => pts.push(p));
+  if (!pts.length) return 0;
+  const pad = shape.margin / 60;
+  const south = Math.min(...pts.map(p => p[0])) - pad, north = Math.max(...pts.map(p => p[0])) + pad;
+  const west = Math.min(...pts.map(p => p[1])) - pad * 1.4, east = Math.max(...pts.map(p => p[1])) + pad * 1.4;
+  const cells = aviationCellsFor(south, west, north, east).slice(0, 16);
+  const got = await Promise.all(cells.map(([lat, lon]) => aviationCell(lat, lon, true)));
+  return got.filter(Boolean).length;
+}
 
 // Keep the open position sheet moving with each new fix.
 function updatePositionSheet() {
@@ -4515,6 +4718,13 @@ function sketchMapOverlays(map, page, log) {
   }
 }
 
+// On a chart page: the CAP grid, and airspace, airports and navaids where the chart lacks them.
+function sketchAviation(map, page) {
+  if (!CHART_LAYERS[page.bg]) return;
+  capGridLayer(map);
+  if (chartNeedsAviation(page.bg)) aviationLayer(map);
+}
+
 // The background as a picture W × H at a whole tile zoom, for the page's PDF picture.
 async function renderSketchBackground(view, W, H, bg) {
   if (CHART_LAYERS[bg]) return renderChartImage(view, W, H, bg);
@@ -4570,6 +4780,7 @@ function setupMapSketch(page) {
   const tiles = sketchBaseLayer(map, page);
   // the search area and the ForeFlight plan, for bearings
   sketchMapOverlays(map, page, log);
+  sketchAviation(map, page);
   const renderer = L.canvas({ padding: 0.5 });
   const group = L.layerGroup().addTo(map);
   const ms = mapSketch = { map, page, tiles, group, renderer, lines: [], undo: [], snapTimer: null };
@@ -4843,6 +5054,7 @@ function setupNativeMapSketch(page) {
   }).setView([start.lat, start.lon], start.zoom);
   sketchBaseLayer(map, page);
   sketchMapOverlays(map, page, log);
+  sketchAviation(map, page);
   // lines drawn on this page in a browser stay visible under the PencilKit ink
   const renderer = L.canvas({ padding: 0.5 });
   const lines = page.strokes.map(stroke => L.polyline(stroke.p, { color: stroke.c, weight: strokeWeight(stroke, start.zoom), lineCap: 'round', renderer, interactive: false }).addTo(map));
@@ -8506,6 +8718,8 @@ const actions = {
       if (positionMap.tiles) positionMap.map.removeLayer(positionMap.tiles);
       positionMap.tiles = chartTileLayer(key).addTo(positionMap.map);
       positionMap.tiles.bringToBack();
+      if (positionMap.aviation) { positionMap.aviation.stop(); positionMap.aviation = null; }
+      if (chartNeedsAviation(key)) positionMap.aviation = aviationLayer(positionMap.map);
     }
     $$('.pos-layers [data-act="chart-layer"]').forEach(b => b.classList.toggle('active', b.dataset.value === key));
     const note = $('#pos-note');

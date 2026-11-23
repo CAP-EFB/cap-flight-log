@@ -1646,6 +1646,24 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
 }
 .rec-dot::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ff3b7f; }
 
+/* aviation data on Topo and Terrain: airports, navaids and waypoints, sectional-style */
+.av-apt, .av-nav, .av-fix { position: relative; width: 0; height: 0; pointer-events: none; }
+.av-apt i, .av-nav i, .av-fix i { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); display: block; }
+.av-apt i { width: 12px; height: 12px; border-radius: 50%; border: 2.5px solid #1f5fbf; background: #fff; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .85); }
+.av-apt.private i { width: 9px; height: 9px; border-width: 2px; border-color: #a8287d; }
+.av-apt.sea i { border-style: dotted; }
+.av-nav i { width: 14px; height: 14px; background: #1f5fbf; clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%); }
+.av-nav i::after { content: ""; position: absolute; inset: 3px; background: #fff; clip-path: inherit; }
+.av-fix i { width: 10px; height: 9px; background: #1d2a38; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.av-fix.rpt i { background: #a8287d; }
+.av-apt span, .av-nav span, .av-fix span {
+  position: absolute; left: 9px; top: -7px; white-space: nowrap;
+  font: 700 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #14243a; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff;
+}
+.av-apt.private span { color: #6b1d52; font-weight: 600; }
+.av-fix span { font-size: 10px; font-weight: 600; }
+
 /* CAP grid numbers on the sectional */
 .grid-label {
   transform: translate(-50%, -50%);

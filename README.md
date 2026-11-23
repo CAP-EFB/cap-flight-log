@@ -56,6 +56,12 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   REC in the header while it records. Shown on the chart (Sectional, Topo or Terrain) with each checkpoint marked by its Fly button
   icon, over the ForeFlight plan the search area was filled from (dashed, waypoints named on tap); summed
   up on Debrief, and exportable as GPX.
+- **Aviation data on Topo and Terrain** — the sectional prints its own; on the topographic and terrain
+  maps (Fly and the sketch pad) the FAA's open aviation data is drawn over the chart: Class B, C, D and
+  surface E airspace and special use airspace in sectional colours, public airports (private strips when
+  zoomed in), navaids, and low-altitude reporting points and waypoints, named as the chart zooms in. The
+  CAP grid is on every chart. The data comes from the FAA's Aeronautical Data Delivery Service in 1°
+  squares, is kept on the iPad, refreshed after 28 days, and saved with a sortie's offline maps.
 - **Offline maps** — Brief › Offline maps saves the Sectional (and, if wanted, Topo and Terrain) around the
   search area, entry and exit points and ForeFlight route, 10 nm around them, in the app's own storage
   (IndexedDB, not in backups). The chart and sketch pad use saved tiles first, then the network, then a
