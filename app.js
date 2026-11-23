@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.28.3';
+const APP_VERSION = '1.29.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1643,23 +1643,14 @@ function flyOverlayHTML(log) {
 
 // The flight log that used to be the Fly page: checkpoints, timeline and OPS checks.
 function flyLogHTML(log) {
-  return `<div class="fly-log-head">
+  return `<div class="fly-log-head" id="fly-log-head">
+      <span class="fly-grab" aria-hidden="true"></span>
       <h2>Flight log</h2>
       <button type="button" class="fly-round small" data-act="fly-log" aria-label="Close the flight log">${flyIcon('close')}</button>
     </div>
     <div class="fly-log-body stack">
       ${installBannerHTML()}
-      ${opsBanner(log)}
-      <section class="card" id="timeline-card">
-        <div class="card-head">
-          <div class="head-left">
-            <h2>Timeline</h2>
-            <span class="count-badge">${log.entries.length + log.observations.length}</span>
-          </div>
-          <button class="btn small primary" data-act="add-obs">+ Observation</button>
-        </div>
-        ${timelineHTML(log)}
-      </section>
+      <section class="card tl-card-wrap" id="timeline-card">${timelineHTML(log)}</section>
       ${opsCardHTML(log)}
     </div>`;
 }
@@ -1668,7 +1659,7 @@ function flyView(log) {
   return `<div class="fly-shell${flyLogOpen ? ' log-open' : ''}" id="fly-shell">
       <div class="pos-map" id="pos-map"></div>
       <div class="fly-ui" id="fly-ui">${flyOverlayHTML(log)}</div>
-      <div class="fly-log" id="fly-log" aria-hidden="${flyLogOpen ? 'false' : 'true'}">${flyLogHTML(log)}</div>
+      <div class="fly-log" id="fly-log" style="transform:translateY(${flyLogOffset()})" aria-hidden="${flyLogOpen ? 'false' : 'true'}">${flyLogHTML(log)}</div>
     </div>`;
 }
 
@@ -1685,6 +1676,7 @@ function refreshFlyView(log) {
   if (body) body.scrollTop = scroll;
   shell.classList.toggle('log-open', flyLogOpen);
   logEl.setAttribute('aria-hidden', flyLogOpen ? 'false' : 'true');
+  if (!logEl.style.transition) logEl.style.transform = 'translateY(' + flyLogOffset() + ')';
   drawTrackOnMap();
   placeHobbsPopover();   // the buttons were redrawn: re-point the keypad's arrow
   refreshObsPop();
@@ -1712,14 +1704,68 @@ function setFlyPos(open) {
   if (chip) chip.classList.toggle('open', open && activeTab === 'fly');
 }
 
-function setFlyLog(open) {
+/* The flight log slides over the map at two heights, half and full, and is
+   dragged by its head: a flick or a drag past the middle moves it on. */
+let flyLogSnap = 'half';
+const FLY_LOG_HALF = 0.42;   // the share of its height it slides down at half
+
+function flyLogOffset() {
+  if (!flyLogOpen) return '102%';
+  return flyLogSnap === 'full' ? '0%' : (FLY_LOG_HALF * 100) + '%';
+}
+
+function setFlyLog(open, snap) {
   flyLogOpen = open;
+  if (snap) flyLogSnap = snap;
+  else if (open && !snap) flyLogSnap = flyLogSnap || 'half';
   const shell = $('#fly-shell');
   if (shell) shell.classList.toggle('log-open', open);
   const logEl = $('#fly-log');
-  if (logEl) logEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+  if (logEl) {
+    logEl.style.transition = '';
+    logEl.style.transform = 'translateY(' + flyLogOffset() + ')';
+    logEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+  }
   if (open) autoGrowAll();
 }
+
+// Drag the log by its head: it follows the finger, then settles.
+(function dragFlyLog() {
+  let drag = null;
+  document.addEventListener('pointerdown', event => {
+    const head = event.target.closest('#fly-log-head');
+    if (!head || event.target.closest('button')) return;
+    const el = $('#fly-log');
+    const h = el.offsetHeight;
+    const start = new DOMMatrixReadOnly(getComputedStyle(el).transform).m42;
+    drag = { el, h, start, y: event.clientY, t: performance.now(), lastY: event.clientY, lastT: performance.now(), v: 0, offset: start };
+    el.style.transition = 'none';
+    head.setPointerCapture(event.pointerId);
+  });
+  document.addEventListener('pointermove', event => {
+    if (!drag) return;
+    const now = performance.now();
+    drag.v = (event.clientY - drag.lastY) / Math.max(1, now - drag.lastT);
+    drag.lastY = event.clientY;
+    drag.lastT = now;
+    drag.offset = Math.max(0, Math.min(drag.h, drag.start + event.clientY - drag.y));
+    drag.el.style.transform = 'translateY(' + drag.offset + 'px)';
+  });
+  const end = () => {
+    if (!drag) return;
+    const { offset, h, v } = drag;
+    drag = null;
+    const stops = [['full', 0], ['half', FLY_LOG_HALF * h], ['closed', h]];
+    let target;
+    if (v > 0.45) target = offset < FLY_LOG_HALF * h ? 'half' : 'closed';          // flicked down
+    else if (v < -0.45) target = offset > FLY_LOG_HALF * h ? 'half' : 'full';      // flicked up
+    else target = stops.reduce((a, b) => Math.abs(b[1] - offset) < Math.abs(a[1] - offset) ? b : a)[0];
+    if (target === 'closed') setFlyLog(false);
+    else setFlyLog(true, target);
+  };
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+})();
 
 // Keep the open position sheet moving with each new fix.
 function updatePositionSheet() {
@@ -2964,62 +3010,111 @@ function render() {
   }
 }
 
-function opsBanner(log) {
-  const last = log.ops[log.ops.length - 1];
-  if (!last) {
-    return `<button class="status-banner none" data-act="goto-ops">
-      <span class="sb-dot"></span>
-      <span>No OPS checks yet — <strong>record the first one</strong></span>
-    </button>`;
-  }
+/* ---------- the flight log as a vertical timeline ----------
+   Checkpoints, observations and OPS checks together in time order, each a
+   node on one line: the time on the left, an icon on the line, a card on the
+   right, and the minutes between them on the line itself. They are still
+   stored, numbered and printed separately. */
+const TL_ICONS = {
+  obs: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  ops: '<path d="M9 11.5l2 2 4-4"/><circle cx="12" cy="12" r="9"/>',
+  opsFlag: '<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>',
+  next: '<circle cx="12" cy="12" r="3"/>'
+};
+const tlIcon = path => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 
-  const next = nextOpsDue(log);
-  const interval = state.settings.opsInterval || 30;
-  const since = last.time ? (nowMinutes() - timeToMin(last.time) + 1440) % 1440 : null;
-  const live = since != null && since < 480;
-  const overdue = live && since > interval + 4;
+// Observations opened for editing in the timeline (not saved).
+const expandedObs = new Set();
 
-  if (overdue) {
-    return `<button class="status-banner due" data-act="goto-ops">
-      <span class="sb-dot"></span>
-      <span><strong>OPS check due</strong> — last was ${fmtZ(last.time)} (${fmtDuration(since)} ago)</span>
-    </button>`;
-  }
-
-  return `<button class="status-banner ok" data-act="goto-ops">
-    <span class="sb-dot"></span>
-    <span><strong>OPS ${last.normal ? 'normal' : 'flagged'}</strong> at ${fmtZ(last.time)}${next ? ' · next ' + fmtZ(next) : ''} · ${log.ops.length} check${log.ops.length === 1 ? '' : 's'}</span>
-  </button>`;
+function tlGap(minutes) {
+  if (minutes == null || minutes <= 0) return '';
+  const text = minutes < 60 ? minutes + ' min' : Math.floor(minutes / 60) + ' h ' + pad2(minutes % 60) + ' min';
+  return `<div class="tl-gap" aria-hidden="true"><span>${text}</span></div>`;
 }
 
-function entryRowHTML(entry, previous) {
-  const delta = previous && previous.time && entry.time ? diffMin(previous.time, entry.time) : null;
+function tlEntryHTML(entry) {
+  const quick = QUICK.find(q => q.kind === entry.kind);
   const pos = fmtEntryPosition(entry);
-  const bits = [];
-  if (entry.hobbs) bits.push('Hobbs ' + esc(entry.hobbs));
-  if (pos) bits.push(esc(pos));
-  if (entry.gpsAccuracy) bits.push('GPS ±' + esc(entry.gpsAccuracy) + ' m');
-  if (delta != null && delta > 0) bits.push('<span class="entry-delta">+' + delta + 'm</span>');
-  return `<div class="entry-row" data-act="edit-entry" data-id="${esc(entry.id)}" role="button" tabindex="0">
-      <div class="entry-time mono">${entry.time ? esc(fmtZ(entry.time)) : '—'}</div>
-      <div>
-        <div class="entry-title">${esc(entry.event || 'Log entry')}${entry.kind ? '<span class="tag">checkpoint</span>' : ''}</div>
-        ${bits.length ? '<div class="entry-sub">' + bits.join(' <span class="muted">·</span> ') + '</div>' : ''}
-        ${entry.note ? '<div class="entry-note">' + esc(entry.note) + '</div>' : ''}
+  const meta = [];
+  if (entry.hobbs) meta.push('Hobbs <b class="mono">' + esc(entry.hobbs) + '</b>');
+  if (pos) meta.push('<span class="mono">' + esc(pos) + '</span>');
+  if (entry.gpsAccuracy) meta.push('±' + esc(entry.gpsAccuracy) + ' m');
+  return `<div class="tl-item ${quick ? 'cp' : 'custom'}" data-act="edit-entry" data-id="${esc(entry.id)}" role="button" tabindex="0">
+      <div class="tl-time mono">${entry.time ? esc(fmtZ(entry.time)) : '—'}</div>
+      <div class="tl-node">${tlIcon(quick ? quick.icon : CUSTOM_CHECKPOINT_ICON)}</div>
+      <div class="tl-card">
+        <div class="tl-title">${esc(entry.event || 'Log entry')}</div>
+        ${meta.length ? `<div class="tl-meta">${meta.join('<span class="tl-dot">·</span>')}</div>` : ''}
+        ${entry.note ? `<div class="tl-note">${esc(entry.note)}</div>` : ''}
+        <button type="button" class="row-del tl-del" data-act="del-entry" data-id="${esc(entry.id)}" aria-label="Delete entry">×</button>
       </div>
-      <button type="button" class="row-del" data-act="del-entry" data-id="${esc(entry.id)}" aria-label="Delete entry">×</button>
     </div>`;
 }
 
-/* The sortie as one timeline: flight log entries and observations together, in
-   time order. They are still stored, numbered and printed separately. */
+function tlObsHTML(log, obs, index) {
+  if (expandedObs.has(obs.id)) {
+    return `<div class="tl-item tl-obs open">
+        <div class="tl-time mono">${obs.time ? esc(fmtZ(obs.time)) : '—'}</div>
+        <div class="tl-node">${tlIcon(TL_ICONS.obs)}</div>
+        <div class="tl-card tl-obs-edit">
+          ${obsCardHTML(log, obs, index)}
+          <button type="button" class="btn small tl-collapse" data-act="obs-collapse" data-id="${esc(obs.id)}">Done</button>
+        </div>
+      </div>`;
+  }
+  const photos = Array.isArray(obs.photos) ? obs.photos : [];
+  const pos = obs.lat && obs.lon ? obs.lat + '  ' + obs.lon : '';
+  return `<div class="tl-item tl-obs" data-act="obs-expand" data-id="${esc(obs.id)}" role="button" tabindex="0">
+      <div class="tl-time mono">${obs.time ? esc(fmtZ(obs.time)) : '—'}</div>
+      <div class="tl-node">${tlIcon(TL_ICONS.obs)}</div>
+      <div class="tl-card">
+        <div class="tl-title">Observation ${index + 1}</div>
+        <div class="tl-text${obs.text ? '' : ' empty'}">${obs.text ? esc(obs.text) : 'No note yet. Tap to add one.'}</div>
+        ${photos.length ? `<div class="tl-photos">${photos.map((photo, i) => `<button type="button" class="tl-photo" data-act="view-photo" data-obs="${esc(obs.id)}" data-index="${i}" aria-label="View photo ${i + 1}"><img src="${esc(photo.thumb || photo.data)}" alt=""></button>`).join('')}</div>` : ''}
+        ${pos || obs.hobbs ? `<div class="tl-meta">${[obs.hobbs ? 'Hobbs <b class="mono">' + esc(obs.hobbs) + '</b>' : '', pos ? '<span class="mono">' + esc(pos) + '</span>' : ''].filter(Boolean).join('<span class="tl-dot">·</span>')}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function tlOpsHTML(op, index) {
+  const meta = [];
+  if (op.fuel) meta.push('Fuel <b>' + esc(op.fuel) + '</b>');
+  if (op.altimeter) meta.push('Altimeter <b class="mono">' + esc(op.altimeter) + '</b>');
+  if (op.hobbs) meta.push('Hobbs <b class="mono">' + esc(op.hobbs) + '</b>');
+  return `<div class="tl-item ops${op.normal ? '' : ' flagged'}" data-act="goto-ops" role="button" tabindex="0">
+      <div class="tl-time mono">${op.time ? esc(fmtZ(op.time)) : '—'}</div>
+      <div class="tl-node">${tlIcon(op.normal ? TL_ICONS.ops : TL_ICONS.opsFlag)}</div>
+      <div class="tl-card">
+        <div class="tl-title">OPS check ${index + 1} <span class="tl-tag">${op.normal ? 'Normal' : 'Flagged'}</span></div>
+        ${meta.length ? `<div class="tl-meta">${meta.join('<span class="tl-dot">·</span>')}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+// The figures at the top: time since Engine Start, and what has been logged.
+function tlSummaryHTML(log) {
+  const start = log.times.engineStart.time;
+  const end = log.times.shutDown.time;
+  const engine = isValidTime(start) ? diffMin(start, isValidTime(end) ? end : nowZ()) : null;
+  const next = nextOpsDue(log);
+  const stat = (label, value) => `<div class="tl-stat"><span>${label}</span><b>${value}</b></div>`;
+  return `<div class="tl-summary">
+      ${stat(isValidTime(end) ? 'Engine time' : 'Engine running', engine != null ? esc(fmtDuration(engine)) : '—')}
+      ${stat('Checkpoints', log.entries.length)}
+      ${stat('Observations', log.observations.length)}
+      ${stat('OPS checks', log.ops.length + (next && !isValidTime(end) ? ' <small>next ' + esc(fmtZ(next)) + '</small>' : ''))}
+    </div>`;
+}
+
 function timelineHTML(log) {
   const items = [
     ...log.entries.map(entry => ({ kind: 'entry', time: entry.time, at: entry.createdAt || 0, entry })),
-    ...log.observations.map((obs, index) => ({ kind: 'obs', time: obs.time, at: obs.createdAt || 0, obs, index }))
+    ...log.observations.map((obs, index) => ({ kind: 'obs', time: obs.time, at: obs.createdAt || 0, obs, index })),
+    ...log.ops.map((op, index) => ({ kind: 'ops', time: op.time, at: index, op, index }))
   ];
+  const next = QUICK.find(q => { const e = entryForKind(log, q.kind); return !(e && e.time); });
   if (!items.length) {
-    return `<div class="empty"><strong>Nothing logged yet</strong>Checkpoints you tap and observations you add appear here, in time order.</div>`;
+    return `${tlSummaryHTML(log)}<div class="empty"><strong>Nothing logged yet</strong>Checkpoints you tap, observations you add and OPS checks appear here, in time order.</div>`;
   }
   const minutes = item => (isValidTime(item.time) ? timeToMin(item.time) : null);
   items.sort((x, y) => {
@@ -3029,12 +3124,20 @@ function timelineHTML(log) {
     return x.at - y.at;
   });
   let previous = null;
-  return '<div class="timeline">' + items.map(item => {
-    if (item.kind === 'obs') return obsCardHTML(log, item.obs, item.index);
-    const row = entryRowHTML(item.entry, previous);
-    previous = item.entry;
-    return row;
-  }).join('') + '</div>';
+  const rows = items.map(item => {
+    const gap = previous && isValidTime(previous) && isValidTime(item.time) ? tlGap(diffMin(previous, item.time)) : '';
+    if (isValidTime(item.time)) previous = item.time;
+    if (item.kind === 'obs') return gap + tlObsHTML(log, item.obs, item.index);
+    if (item.kind === 'ops') return gap + tlOpsHTML(item.op, item.index);
+    return gap + tlEntryHTML(item.entry);
+  }).join('');
+  // the checkpoint still to come, greyed at the end of the line
+  const upcoming = next && !log.closed ? `<div class="tl-item next" data-act="quick" data-kind="${esc(next.kind)}" data-label="${esc(next.label)}" role="button" tabindex="0">
+      <div class="tl-time mono">Next</div>
+      <div class="tl-node">${tlIcon(next.icon)}</div>
+      <div class="tl-card"><div class="tl-title">${esc(next.label)}</div><div class="tl-meta">Tap to stamp it now</div></div>
+    </div>` : '';
+  return `${tlSummaryHTML(log)}<div class="tl">${rows}${upcoming}</div>`;
 }
 
 /* Tach start and end follow the readings taken at Engine Start and Shut Down
@@ -7303,7 +7406,7 @@ const actions = {
   'start-flight-log': () => switchTab('fly'),
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
-    setFlyLog(true);
+    setFlyLog(true, 'full');
     const card = $('#ops-card');
     if (card) setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 280);
   },
@@ -7440,7 +7543,9 @@ const actions = {
     if (!positionMap) return;
     if (Number(el.dataset.step) > 0) positionMap.map.zoomIn(); else positionMap.map.zoomOut();
   },
-  'fly-log': () => setFlyLog(!flyLogOpen),
+  'fly-log': () => setFlyLog(!flyLogOpen, 'half'),
+  'obs-expand': el => { expandedObs.add(el.dataset.id); render(); },
+  'obs-collapse': el => { expandedObs.delete(el.dataset.id); render(); },
   'track-map': () => {
     switchTab('fly');
     setTimeout(() => drawTrackOnMap(true), 80);
