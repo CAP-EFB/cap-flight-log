@@ -1375,6 +1375,10 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
 .fly-cp.next { border-color: #4ea8f5; box-shadow: 0 0 0 2px rgba(78, 168, 245, .55), 0 4px 16px rgba(0, 0, 0, .22); }
 .fly-cp.custom { border-style: dashed; }
 .fly-cp.custom svg { color: #f2f6fa; }
+/* + Observation: the blue action at the foot of the rail */
+.fly-cp.obs { background: rgba(24, 119, 204, .85); border-color: rgba(140, 200, 255, .4); }
+.fly-cp.obs svg { color: #fff; }
+.fly-cp.obs .fly-cp-time { color: rgba(255, 255, 255, .8); font-weight: 600; }
 
 /* zoom and centre, left above the actions */
 .fly-mapctl {
@@ -1537,8 +1541,8 @@ html.fly-open, html.fly-open body { overflow: hidden; overscroll-behavior: none;
   .pos-note { display: none; }
 }
 @media (max-width: 600px) {
-  .fly-actions .fly-btn:not(.primary) { font-size: 0; gap: 0; padding: 0 13px; }
-  .fly-actions .fly-btn:not(.primary) .fly-count { display: none; }
+  .fly-actions .fly-btn[data-act="fly-log"] { font-size: 0; gap: 0; padding: 0 13px; }
+  .fly-actions .fly-btn .fly-count { display: none; }
   .pos-layers button { padding: 0 9px; font-size: 12px; }
 }
 

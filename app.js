@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.28.1';
+const APP_VERSION = '1.28.2';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1625,6 +1625,7 @@ function flyOverlayHTML(log) {
     <div class="fly-rail" role="group" aria-label="Checkpoints">
       ${QUICK.map(q => flyCheckpointButton(log, q, next)).join('')}
       <button type="button" class="fly-cp custom" data-act="add-checkpoint">${flyIcon('flag')}<span class="fly-cp-text"><span class="fly-cp-label">+ Checkpoint</span></span></button>
+      <button type="button" class="fly-cp obs" data-act="add-obs">${flyIcon('obs')}<span class="fly-cp-text"><span class="fly-cp-label">+ Observation</span>${log.observations.length ? `<span class="fly-cp-time">${log.observations.length} logged</span>` : ''}</span></button>
     </div>
     <div class="fly-mapctl">
       <button type="button" class="fly-round" data-act="fly-zoom" data-step="1" aria-label="Zoom in">${flyIcon('plus')}</button>
@@ -1632,7 +1633,6 @@ function flyOverlayHTML(log) {
       <button type="button" class="fly-round" data-act="pos-recenter" aria-label="Center on my position">${flyIcon('center')}</button>
     </div>
     <div class="fly-actions">
-      <button type="button" class="fly-btn primary" data-act="add-obs">${flyIcon('obs')}Observation</button>
       <button type="button" class="fly-btn" data-act="ops-add">${flyIcon('ops')}OPS check</button>
       <button type="button" class="fly-btn" data-act="fly-log">${flyIcon('log')}Log${count ? `<span class="fly-count">${count}</span>` : ''}</button>
     </div>
