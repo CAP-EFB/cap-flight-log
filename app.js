@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.26.1';
+const APP_VERSION = '1.27.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -438,6 +438,7 @@ function recordWebTrackPoint(fix) {
   if (last && (fix.at - last[0] < 10000 || distanceMetres(last[1], last[2], fix.lat, fix.lon) < 100)) return;
   log.track.push([fix.at, fix.lat, fix.lon, -9999, Math.round(fix.accuracy), -1, -1]);
   saveQuiet();
+  if (positionMap) drawTrackOnMap();
 }
 
 function distanceMetres(lat1, lon1, lat2, lon2) {
@@ -1382,12 +1383,11 @@ function chartFullZoom() {
   return (window.devicePixelRatio || 1) > 1.4 ? 11 : 12;
 }
 
+// Leaving Fly: drop the map (its element goes with the view).
 function closePositionView() {
   if (positionMap) positionMap.remove();
   positionMap = null;
-  const view = $('#pos-full');
-  if (view) view.remove();
-  document.documentElement.classList.remove('pos-open');
+  document.documentElement.classList.remove('fly-open');
 }
 
 function positionFixHTML(fix) {
@@ -1409,32 +1409,14 @@ function positionFixHTML(fix) {
     <div class="pos-other mono">${esc(fmtCoordDecimal(fix.lat))}, ${esc(fmtCoordDecimal(fix.lon))}  ·  ${esc(fmtCoordDms(fix.lat, true))}  ${esc(fmtCoordDms(fix.lon, false))}</div>`;
 }
 
-function positionSheet() {
+// Build the chart into Fly's map element.
+function mountFlyMap() {
   const fix = freshFix() || lastGpsFix;
-  closePositionView();
-  // Full screen: the chart fills it, the position floats over the top in a
-  // see-through panel, and the buttons sit at the corners.
-  const view = document.createElement('div');
-  view.className = 'pos-full';
-  view.id = 'pos-full';
-  view.innerHTML = `<div class="pos-map" id="pos-map"></div>
-    <div class="pos-panel">
-      <div id="pos-text">${positionFixHTML(freshFix())}</div>
-      <div class="pos-note" id="pos-note">${esc(chartNoteText(chartLayerKey()))}</div>
-    </div>
-    <div class="seg pos-layers" role="group" aria-label="Map">
-      ${Object.entries(CHART_LAYERS).map(([key, chart]) => `<button type="button" data-act="chart-layer" data-value="${key}" class="${key === chartLayerKey() ? 'active' : ''}">${chart.short}</button>`).join('')}
-    </div>
-    <button type="button" class="pos-close" data-act="pos-close" aria-label="Close chart">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
-    </button>
-    <button type="button" class="pos-recenter" data-act="pos-recenter">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
-      Center
-    </button>`;
-  document.body.appendChild(view);
-  document.documentElement.classList.add('pos-open');
-  if (!window.L) return;
+  if (positionMap) positionMap.remove();
+  positionMap = null;
+  document.documentElement.classList.add('fly-open');
+  placeFlyShell();
+  if (!window.L || !$('#pos-map')) return;
   const log = activeLog();
   const center = fix ? [fix.lat, fix.lon] : [39.5, -98.35];
   // The FAA serves the sectional at tile zooms 8–12 (12 is the chart's own
@@ -1442,7 +1424,6 @@ function positionSheet() {
   const map = L.map('pos-map', {
     zoomControl: false, attributionControl: true, minZoom: 5, maxZoom: 15, zoomSnap: 1
   }).setView(center, fix ? chartFullZoom() : 5);
-  L.control.zoom({ position: 'bottomleft' }).addTo(map);
   const tiles = chartTileLayer(chartLayerKey()).addTo(map);
   // CAP grid over the chart: 15-minute grid lines with their numbers, and the
   // 7.5-minute quarters dashed when zoomed in. Redrawn for what is on screen.
@@ -1498,17 +1479,19 @@ function positionSheet() {
     const lon = parseLon(c.lon);
     return lat != null && lon != null ? [lat, lon] : null;
   });
-  if (corners.every(Boolean)) {
-    L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.08, dashArray: '6 4' }).addTo(map);
-  }
+  const area = corners.every(Boolean)
+    ? L.polygon(corners, { color: '#e0662b', weight: 2, fillOpacity: 0.08, dashArray: '6 4' }).addTo(map)
+    : null;
   const accuracy = L.circle(center, { radius: fix ? fix.accuracy : 0, color: '#1877cc', weight: 1, fillOpacity: 0.12 });
   const dot = L.circleMarker(center, { radius: 8, color: '#fff', weight: 3, fillColor: '#1877cc', fillOpacity: 1 });
   if (fix) { accuracy.addTo(map); dot.addTo(map); }
-  positionMap = { map, tiles, dot, accuracy, follow: true, trackLine: null, checkpoints: null, plan: null, remove: () => map.remove() };
-  drawTrackOnMap();
-  pullTrack(activeLog());
+  positionMap = { map, tiles, dot, accuracy, follow: !!fix, logId: log.id, trackLine: null, checkpoints: null, plan: null, tail: null,
+    remove: () => map.remove() };
+  // with no position yet, show the flight so far, the plan or the search area
+  drawTrackOnMap(!fix);
+  if (!fix && !positionMap.trackLine && !positionMap.plan && area) map.fitBounds(area.getBounds(), { padding: [40, 40], maxZoom: chartFullZoom() });
+  pullTrack(log);
   map.on('dragstart', () => { if (positionMap) positionMap.follow = false; });
-  // the sheet animates in; let the map measure itself once it has
   setTimeout(() => map.invalidateSize(), 60);
 }
 
@@ -1577,6 +1560,149 @@ function drawTrackOnMap(fit) {
     positionMap.follow = false;
     positionMap.map.fitBounds(bounds, { padding: [32, 32], maxZoom: chartFullZoom() });
   }
+  if (positionPinned()) { positionMap.accuracy.bringToFront(); positionMap.dot.bringToFront(); }
+}
+
+/* ---------- Fly: the moving map ----------
+   Fly is the chart, filling the screen between the header and the tab bar,
+   with the sortie's controls floating over it: the position top left, the
+   checkpoint buttons down the right, Observation, OPS check and the flight
+   log bottom left, and the map switch bottom right. The map is built once
+   and kept while Fly is open; a redraw only replaces the floating controls. */
+let flyLogOpen = false;
+
+// The checkpoint to tap next: the first in flight order not yet stamped.
+function nextCheckpointKind(log) {
+  const next = QUICK.find(q => { const e = entryForKind(log, q.kind); return !(e && e.time); });
+  return next ? next.kind : '';
+}
+
+function flyCheckpointButton(log, item, next) {
+  const entry = entryForKind(log, item.kind);
+  const done = !!(entry && entry.time);
+  return `<button type="button" class="fly-cp${done ? ' done' : ''}${item.kind === next ? ' next' : ''}" data-act="quick" data-kind="${esc(item.kind)}" data-label="${esc(item.label)}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${item.icon}</svg>
+      <span class="fly-cp-text"><span class="fly-cp-label">${esc(item.label)}</span>${done ? `<span class="fly-cp-time mono">${esc(fmtZ(entry.time))}</span>` : ''}</span>
+    </button>`;
+}
+
+// The OPS status as one line over the map; tapping it records a check.
+function flyOpsChip(log) {
+  const last = log.ops[log.ops.length - 1];
+  if (!last) return `<button type="button" class="fly-chip none" data-act="ops-add"><span class="sb-dot"></span>No OPS checks yet</button>`;
+  const next = nextOpsDue(log);
+  const interval = state.settings.opsInterval || 30;
+  const since = last.time ? (nowMinutes() - timeToMin(last.time) + 1440) % 1440 : null;
+  const overdue = since != null && since < 480 && since > interval + 4;
+  if (overdue) return `<button type="button" class="fly-chip due" data-act="ops-add"><span class="sb-dot"></span>OPS check due · last ${esc(fmtZ(last.time))}</button>`;
+  return `<button type="button" class="fly-chip ok" data-act="ops-add"><span class="sb-dot"></span>OPS ${last.normal ? 'normal' : 'flagged'} ${esc(fmtZ(last.time))}${next ? ' · next ' + esc(fmtZ(next)) : ''}</button>`;
+}
+
+const FLY_ICONS = {
+  obs: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  ops: '<path d="M9 11l2 2 4-4"/><circle cx="12" cy="12" r="9"/>',
+  log: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  flag: CUSTOM_CHECKPOINT_ICON,
+  center: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  close: '<path d="m6 6 12 12M18 6 6 18"/>'
+};
+const flyIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${FLY_ICONS[name]}</svg>`;
+
+function flyOverlayHTML(log) {
+  const next = nextCheckpointKind(log);
+  const count = log.entries.length + log.observations.length;
+  return `<div class="fly-top">
+      <div class="pos-panel fly-panel">
+        <div id="pos-text">${positionFixHTML(freshFix())}</div>
+        <div class="pos-note" id="pos-note">${esc(chartNoteText(chartLayerKey()))}</div>
+      </div>
+      ${flyOpsChip(log)}
+    </div>
+    <div class="fly-rail" role="group" aria-label="Checkpoints">
+      ${QUICK.map(q => flyCheckpointButton(log, q, next)).join('')}
+      <button type="button" class="fly-cp custom" data-act="add-checkpoint">${flyIcon('flag')}<span class="fly-cp-text"><span class="fly-cp-label">+ Checkpoint</span></span></button>
+    </div>
+    <div class="fly-mapctl">
+      <button type="button" class="fly-round" data-act="fly-zoom" data-step="1" aria-label="Zoom in">${flyIcon('plus')}</button>
+      <button type="button" class="fly-round" data-act="fly-zoom" data-step="-1" aria-label="Zoom out">${flyIcon('minus')}</button>
+      <button type="button" class="fly-round" data-act="pos-recenter" aria-label="Center on my position">${flyIcon('center')}</button>
+    </div>
+    <div class="fly-actions">
+      <button type="button" class="fly-btn primary" data-act="add-obs">${flyIcon('obs')}Observation</button>
+      <button type="button" class="fly-btn" data-act="ops-add">${flyIcon('ops')}OPS check</button>
+      <button type="button" class="fly-btn" data-act="fly-log">${flyIcon('log')}Log${count ? `<span class="fly-count">${count}</span>` : ''}</button>
+    </div>
+    <div class="seg pos-layers" role="group" aria-label="Map">
+      ${Object.entries(CHART_LAYERS).map(([key, chart]) => `<button type="button" data-act="chart-layer" data-value="${key}" class="${key === chartLayerKey() ? 'active' : ''}">${chart.short}</button>`).join('')}
+    </div>`;
+}
+
+// The flight log that used to be the Fly page: checkpoints, timeline and OPS checks.
+function flyLogHTML(log) {
+  return `<div class="fly-log-head">
+      <h2>Flight log</h2>
+      <button type="button" class="fly-round small" data-act="fly-log" aria-label="Close the flight log">${flyIcon('close')}</button>
+    </div>
+    <div class="fly-log-body stack">
+      ${installBannerHTML()}
+      ${opsBanner(log)}
+      <section class="card" id="timeline-card">
+        <div class="card-head">
+          <div class="head-left">
+            <h2>Timeline</h2>
+            <span class="count-badge">${log.entries.length + log.observations.length}</span>
+          </div>
+          <button class="btn small primary" data-act="add-obs">+ Observation</button>
+        </div>
+        ${timelineHTML(log)}
+      </section>
+      ${opsCardHTML(log)}
+    </div>`;
+}
+
+function flyView(log) {
+  return `<div class="fly-shell${flyLogOpen ? ' log-open' : ''}" id="fly-shell">
+      <div class="pos-map" id="pos-map"></div>
+      <div class="fly-ui" id="fly-ui">${flyOverlayHTML(log)}</div>
+      <div class="fly-log" id="fly-log" aria-hidden="${flyLogOpen ? 'false' : 'true'}">${flyLogHTML(log)}</div>
+    </div>`;
+}
+
+// Fly is already on screen with its map: swap in fresh controls and log only.
+function refreshFlyView(log) {
+  const ui = $('#fly-ui');
+  const logEl = $('#fly-log');
+  const shell = $('#fly-shell');
+  if (!ui || !logEl || !shell) return false;
+  ui.innerHTML = flyOverlayHTML(log);
+  const scroll = logEl.querySelector('.fly-log-body') ? logEl.querySelector('.fly-log-body').scrollTop : 0;
+  logEl.innerHTML = flyLogHTML(log);
+  const body = logEl.querySelector('.fly-log-body');
+  if (body) body.scrollTop = scroll;
+  shell.classList.toggle('log-open', flyLogOpen);
+  logEl.setAttribute('aria-hidden', flyLogOpen ? 'false' : 'true');
+  drawTrackOnMap();
+  return true;
+}
+
+// The map fills the space between the header and the tab bar.
+function placeFlyShell() {
+  const shell = $('#fly-shell');
+  const bar = $('.topbar');
+  if (!shell || !bar) return;
+  shell.style.top = Math.max(0, Math.round(bar.getBoundingClientRect().bottom)) + 'px';
+  if (positionMap) positionMap.map.invalidateSize();
+}
+
+function setFlyLog(open) {
+  flyLogOpen = open;
+  const shell = $('#fly-shell');
+  if (shell) shell.classList.toggle('log-open', open);
+  const logEl = $('#fly-log');
+  if (logEl) logEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+  if (open) autoGrowAll();
 }
 
 // Keep the open position sheet moving with each new fix.
@@ -1593,6 +1719,18 @@ function updatePositionSheet() {
   }
   positionMap.dot.setLatLng(at);
   positionMap.accuracy.setLatLng(at).setRadius(fix.accuracy);
+  // while the track records, join its last saved point to where the aircraft is now
+  const log = activeSortie();
+  const last = log && trackSortieId === log.id && log.track[log.track.length - 1];
+  if (last) {
+    const seg = [[last[1], last[2]], at];
+    if (positionMap.tail) positionMap.tail.setLatLngs(seg);
+    else positionMap.tail = L.polyline(seg, { color: '#d81b60', weight: 4.5, opacity: 0.85, lineCap: 'round' }).addTo(positionMap.map);
+  } else if (positionMap.tail) {
+    positionMap.tail.remove();
+    positionMap.tail = null;
+  }
+  positionMap.dot.bringToFront();
   if (positionMap.follow) positionMap.map.panTo(at, { animate: true });
 }
 
@@ -2781,9 +2919,14 @@ function render() {
   if (!TABS.includes(activeTab) && !SCREENS.includes(activeTab)) activeTab = defaultTab(log);
   // Brief…Sign are about one sortie: Missions until one is open
   if (activeTab !== 'logbook' && !activeSortie()) activeTab = 'logbook';
+  if (activeTab !== 'fly' && positionMap) closePositionView();
   if (activeTab === 'logbook') view.innerHTML = logbookView();
   else if (activeTab === 'plan') view.innerHTML = planView(log);
-  else if (activeTab === 'fly') view.innerHTML = flyView(log);
+  else if (activeTab === 'fly') {
+    // the map stays; only its controls and the log are redrawn
+    if (positionMap && positionMap.logId === log.id && refreshFlyView(log)) placeFlyShell();
+    else { view.innerHTML = flyView(log); mountFlyMap(); }
+  }
   else if (activeTab === 'notes') view.innerHTML = notesView(log);
   else if (activeTab === 'debrief') view.innerHTML = debriefView(log);
   else if (activeTab === 'sign') view.innerHTML = signView(log);
@@ -2827,17 +2970,6 @@ function opsBanner(log) {
   return `<button class="status-banner ok" data-act="goto-ops">
     <span class="sb-dot"></span>
     <span><strong>OPS ${last.normal ? 'normal' : 'flagged'}</strong> at ${fmtZ(last.time)}${next ? ' · next ' + fmtZ(next) : ''} · ${log.ops.length} check${log.ops.length === 1 ? '' : 's'}</span>
-  </button>`;
-}
-
-function quickButton(log, item) {
-  const entry = entryForKind(log, item.kind);
-  const done = !!(entry && entry.time);
-  const cls = 'quick' + (done ? ' done' : '');
-  return `<button type="button" class="${cls}" data-act="quick" data-kind="${esc(item.kind)}" data-label="${esc(item.label)}">
-    <svg class="quick-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${item.icon}</svg>
-    <span class="quick-label">${esc(item.label)}</span>
-    <span class="quick-time mono">${done ? fmtZ(entry.time) : ''}</span>
   </button>`;
 }
 
@@ -3303,33 +3435,6 @@ function opsCardHTML(log) {
         ${ops || '<div class="empty"><strong>No OPS checks</strong>Tap “Record check” every 30 minutes.</div>'}
       </div>
     </section>`;
-}
-
-function flyView(log) {
-  return `<div class="stack">
-    ${installBannerHTML()}
-    ${opsBanner(log)}
-    <section class="card">
-      <div class="card-head">
-        <div class="head-left"><h2>Checkpoints</h2></div>
-        <span class="muted small">Tap to stamp UTC</span>
-      </div>
-      <div class="quick-grid">${QUICK.map(q => quickButton(log, q)).join('')}</div>
-      <button type="button" class="btn soft wide gps-mark" data-act="add-checkpoint">+ Checkpoint</button>
-      <div class="gps-hint">Tap a checkpoint to stamp the time and position. + Checkpoint adds one of your own.</div>
-    </section>
-    <section class="card" id="timeline-card">
-      <div class="card-head">
-        <div class="head-left">
-          <h2>Timeline</h2>
-          <span class="count-badge">${log.entries.length + log.observations.length}</span>
-        </div>
-        <button class="btn small primary" data-act="add-obs">+ Observation</button>
-      </div>
-      ${timelineHTML(log)}
-    </section>
-    ${opsCardHTML(log)}
-  </div>`;
 }
 
 // One column of the CAPF 104a plan-versus-actual grid: planned on Brief, actual on Debrief.
@@ -7037,8 +7142,9 @@ const actions = {
   'start-flight-log': () => switchTab('fly'),
   'goto-ops': () => {
     if (activeTab !== 'fly') switchTab('fly');
+    setFlyLog(true);
     const card = $('#ops-card');
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (card) setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 280);
   },
   'quick': el => quickLog(el.dataset.kind, el.dataset.label || 'Log entry'),
   'add-entry': () => openEntrySheet(null),
@@ -7144,18 +7250,25 @@ const actions = {
       if (gpsState === 'unavailable') { toast(gpsErrorText(window.isSecureContext ? { unsupported: true } : { secure: true })); return; }
       if (gpsWatchId == null) startGpsWatch();
     }
-    positionSheet();
+    // the header's position opens Fly's moving map, centred on the aircraft
+    if (activeTab !== 'fly') switchTab('fly');
+    actions['pos-recenter']();
   },
-  'pos-close': () => closePositionView(),
   'pos-recenter': () => {
     const fix = freshFix() || lastGpsFix;
-    if (!positionMap || !fix) return;
+    if (!positionMap) return;
+    if (!fix) { toast('No GPS position yet'); return; }
     positionMap.follow = true;
-    positionMap.map.setView([fix.lat, fix.lon], chartFullZoom());
+    positionMap.map.setView([fix.lat, fix.lon], Math.max(positionMap.map.getZoom(), chartFullZoom()));
   },
+  'fly-zoom': el => {
+    if (!positionMap) return;
+    if (Number(el.dataset.step) > 0) positionMap.map.zoomIn(); else positionMap.map.zoomOut();
+  },
+  'fly-log': () => setFlyLog(!flyLogOpen),
   'track-map': () => {
-    positionSheet();
-    setTimeout(() => drawTrackOnMap(true), 320);
+    switchTab('fly');
+    setTimeout(() => drawTrackOnMap(true), 80);
   },
   'track-gpx': () => {
     const log = activeLog();
@@ -7570,10 +7683,13 @@ document.addEventListener('focusout', () => {
   }, 0);
 });
 
+// rotating the iPad or the header changing height moves Fly's map edge
+window.addEventListener('resize', () => { if (activeTab === 'fly') placeFlyShell(); });
+
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
-    if ($('#pos-full')) closePositionView();
-    else if ($('#overlay').classList.contains('show')) closeSheet();
+    if ($('#overlay').classList.contains('show')) closeSheet();
+    else if (activeTab === 'fly' && flyLogOpen) setFlyLog(false);
     else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   }
   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {

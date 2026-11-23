@@ -30,9 +30,13 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   area (corners, entry and exit points, ForeFlight FPL import), offline maps, the planned column of the
   SAR worksheet (CAPF 104a), frequencies (including Air/Ground, Air/Air, base, base telephone and required
   radio checks) and nav aids. The aeroplane button goes on to Fly.
-- **Fly** — checkpoint buttons that stamp UTC time and GPS position and ask for Hobbs (and tach at Engine
-  Start and Shut Down), one timeline of flight log entries and observations (up to six photos each) in time order, and OPS checks with a
-  next-due reminder.
+- **Fly** — a moving map (Sectional, Topo or Terrain) between the header and the tab bar, following the
+  aircraft, with the track, checkpoints, ForeFlight plan and search area on it. Over the map on dark glass:
+  the position (grid, cell, accuracy) and OPS status top left; the checkpoint buttons down the right (stamped
+  ones green with their time, the next one outlined), which stamp UTC time and GPS position and ask for Hobbs
+  (and tach at Engine Start and Shut Down); zoom and centre; Observation, OPS check and Log bottom left. Log
+  slides up the timeline of entries and observations (up to six photos each) and the OPS checks with their
+  next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
 - **Notes** — free text plus a sketch pad for a finger or Apple Pencil, sized to fit the screen, with a
   full-screen button. Add as many pages as needed; each page has its own background: grid, plain, or the
   FAA sectional, USGS topographic or USGS terrain map around the search area (saved with the page, so it
