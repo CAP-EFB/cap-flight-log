@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.23.2';
+const APP_VERSION = '1.23.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -1037,13 +1037,19 @@ function drawTrackOnMap(fit) {
   if (positionMap.plan) positionMap.plan.remove();
   // the ForeFlight plan, dashed, under the track; each waypoint named on tap
   const plan = log.fpl && log.fpl.points.length ? log.fpl.points : [];
+  // a white casing under the dashes keeps the route readable over the busy sectional
+  const route = plan.map(p => [p[0], p[1]]);
   positionMap.plan = plan.length ? L.featureGroup([
-    L.polyline(plan.map(p => [p[0], p[1]]), { color: '#1d5fa8', weight: 2.5, opacity: 0.85, dashArray: '7 6' }),
-    ...plan.map(p => L.circleMarker([p[0], p[1]], { radius: 4, color: '#1d5fa8', weight: 2, fillColor: '#fff', fillOpacity: 1 })
+    L.polyline(route, { color: '#ffffff', weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }),
+    L.polyline(route, { color: '#0a47c2', weight: 4, opacity: 1, dashArray: '12 7', lineCap: 'butt', lineJoin: 'round' }),
+    ...plan.map(p => L.circleMarker([p[0], p[1]], { radius: 5.5, color: '#0a47c2', weight: 3, fillColor: '#fff', fillOpacity: 1 })
       .bindTooltip(p[2] || 'Waypoint', { direction: 'top', offset: [0, -4] }))
   ]).addTo(positionMap.map) : null;
   positionMap.trackLine = pts.length > 1
-    ? L.polyline(pts, { color: '#d81b60', weight: 3, opacity: 0.9 }).addTo(positionMap.map)
+    ? L.featureGroup([
+      L.polyline(pts, { color: '#ffffff', weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round' }),
+      L.polyline(pts, { color: '#d81b60', weight: 4.5, opacity: 1, lineCap: 'round', lineJoin: 'round' })
+    ]).addTo(positionMap.map)
     : null;
   const markers = log.entries.map(entry => {
     const at = checkpointPosition(log, entry);
