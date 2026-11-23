@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.34.0';
+const APP_VERSION = '1.34.1';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -4828,7 +4828,7 @@ function setupNativeMapSketch(page) {
   nativeMapSketch = { map, page, region };
 
   const rect = sketchRect();
-  if (!rect) return;
+  if (!rect || rect.width < 10 || rect.height < 10) { console.warn('[sketch] map page has no size yet'); return; }
   // zoom 7 to 15 of the chart, but never smaller than the region
   const minScale = Math.max(Math.pow(2, 7 - region.zb), rect.width / region.w, rect.height / region.h);
   const v = mapToViewport(region, start.lat, start.lon, Math.max(start.zoom, region.zb + Math.log2(minScale)), rect.width, rect.height);
@@ -4919,8 +4919,9 @@ async function applyNativeMapSketch(data) {
    (`inkBase`), and new strokes go over it. */
 let nativeSketchOn = false;
 
+// Where the canvas goes: the paper page, or a map page's whole map.
 function sketchRect() {
-  const wrap = $('.sketch-stage .canvas-wrap');
+  const wrap = $('#sketch-map') || $('.sketch-stage .canvas-wrap');
   if (!wrap) return null;
   const r = wrap.getBoundingClientRect();
   return { x: r.left, y: r.top, width: r.width, height: r.height };
