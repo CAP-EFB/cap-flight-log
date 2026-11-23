@@ -13,7 +13,7 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
 **Brief → Fly → Notes → Debrief → Sign**.
 
 - **Missions** — the first tab: the picked mission at the top with its sorties and + Add sortie, then the
-  previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it. The +
+  previous missions and totals (sorties, Hobbs, tracked distance). Tapping a mission picks it; tapping a sortie opens its Brief. The +
   button adds a mission from WMIRS (number required; symbol, name, date and base optional). Mission
   details can close a mission once it is closed in WMIRS.
 - **Adding a sortie** — the WMIRS Air Sortie Add/Edit fields: Sortie No. (the next one is suggested),

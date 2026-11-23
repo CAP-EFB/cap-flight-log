@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.22.2';
+const APP_VERSION = '1.22.3';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2178,9 +2178,9 @@ function installBannerHTML() {
 
 const TABS = ['logbook', 'plan', 'fly', 'notes', 'debrief', 'sign'];
 
-// Where a sortie opens: Missions until one is open, then Fly.
+// Where a sortie opens: Missions until one is open, then its Brief.
 function defaultTab() {
-  return activeSortie() ? 'fly' : 'logbook';
+  return activeSortie() ? 'plan' : 'logbook';
 }
 
 // The sortie tabs (Brief…Sign) open once a sortie of the picked mission is open.
