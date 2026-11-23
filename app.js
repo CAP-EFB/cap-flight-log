@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.31.1';
+const APP_VERSION = '1.32.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -2313,8 +2313,19 @@ function blankRadio() {
    the PDF and printout. */
 const SKETCH_BACKGROUNDS = [['grid', 'Grid'], ['plain', 'Plain'], ['sectional', 'Sectional'], ['topo', 'Topo'], ['terrain', 'Terrain']];
 
+// A page is 1000 points wide; its height follows the shape of the screen it
+// was started on (1250 for pages from before 1.32.0).
 function blankSketchPage(bg) {
-  return { id: uid(), bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '' };
+  return { id: uid(), w: 1000, h: 1250, bg: bg || 'grid', bgImage: '', map: null, ink: '', image: '', pk: '', inkBase: '' };
+}
+
+function sketchSize(page) {
+  return { w: page.w || 1000, h: page.h || 1250 };
+}
+
+// Nothing drawn and no map: a page that can still take the screen's shape.
+function sketchPageBlank(page) {
+  return !page.ink && !page.pk && !page.inkBase && !CHART_LAYERS[page.bg] && page.bg !== 'image';
 }
 
 function normalizeSketchPages(raw) {
@@ -2328,7 +2339,9 @@ function normalizeSketchPages(raw) {
     image: safeImage(p.image),
     // the iPad app's PencilKit drawing (base64), and the ink drawn before it
     pk: typeof p.pk === 'string' && /^[A-Za-z0-9+/=]*$/.test(p.pk) ? p.pk : '',
-    inkBase: safeImage(p.inkBase)
+    inkBase: safeImage(p.inkBase),
+    w: 1000,
+    h: Math.min(2400, Math.max(300, Math.round(Number(p.h) || 1250)))
   })) : [];
   // Before 1.24.0 a log had one sketch, saved flat with its grid: it becomes
   // page 1, drawn on as its own background.
@@ -2978,6 +2991,7 @@ function render() {
   renderStrip();
   renderGpsChip();
   renderTabbar();
+  renderTopbarTools();
   placePageTop();
   const chip = $('#gpsChip');
   if (chip) chip.classList.toggle('open', activeTab === 'fly' && flyPosOpen);
@@ -4216,52 +4230,65 @@ const SKETCH_TOOL_ICONS = {
 };
 const sketchIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SKETCH_TOOL_ICONS[name] || SKETCH_ICONS[name]}</svg>`;
 
-/* The sketch pad, full page like Fly: the 4:5 page as large as fits on a dark
-   surface between the header and the tab bar, its controls on glass in a
-   strip above and below it (in the app the PencilKit canvas sits over the
-   page, so nothing floats on it). Full screen hides the header and tab bar. */
-function sketchView(log) {
+/* The sketch pad fills everything between the header and the tab bar: the
+   page takes the shape of the screen, and its tools sit in a row of the
+   header, because in the app the PencilKit canvas lies over the page and
+   would hide anything placed on it. Full screen hides the rest of the
+   header and the tab bar; the tools stay. */
+function sketchToolsHTML(log) {
   const { page, index, count } = currentSketchPage(log);
   const bg = page.bg === 'image' ? '' : page.bg;
   const full = sketchFullscreen;
-  return `<div class="sketch-shell${full ? ' fullscreen' : ''}" id="sketch-card">
-      <div class="sk-bar sk-top">
-        <div class="seg sk-glass sk-bgs" role="group" aria-label="Background">
-          ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
-        </div>
-        <div class="sk-group">
-          ${NATIVE ? '' : `<div class="sk-glass sk-pens" role="group" aria-label="Pen">
-            <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
-            <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
-            <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
-          </div>`}
-          <div class="sk-glass sk-actions">
-            <button type="button" class="sk-btn" data-act="undo-sketch" aria-label="Undo" title="Undo">${sketchIcon('undo')}</button>
-            ${NATIVE ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
-            <button type="button" class="sk-btn" data-act="clear-sketch" aria-label="Clear the drawing" title="Clear the drawing">${sketchIcon('clear')}</button>
-            <button type="button" class="sk-btn" data-act="sketch-fullscreen" aria-label="${full ? 'Exit full screen' : 'Full screen'}" title="${full ? 'Exit full screen' : 'Full screen'}">${sketchIcon(full ? 'shrink' : 'expand')}</button>
-          </div>
-        </div>
+  return `<div class="sk-row">
+      <div class="seg sk-glass sk-bgs" role="group" aria-label="Background">
+        ${SKETCH_BACKGROUNDS.map(([key, label]) => `<button type="button" data-act="sketch-bg" data-value="${key}" class="${bg === key ? 'active' : ''}">${label}</button>`).join('')}
       </div>
+      ${NATIVE ? '' : `<div class="sk-glass sk-pens" role="group" aria-label="Pen">
+        <button type="button" class="swatch active" data-act="pen" data-color="#17222e" aria-label="Black pen" title="Black pen"></button>
+        <button type="button" class="swatch red" data-act="pen" data-color="#b3261e" aria-label="Red pen" title="Red pen"></button>
+        <button type="button" class="swatch eraser" data-act="eraser" aria-label="Eraser" title="Eraser">⌫</button>
+      </div>`}
+      <div class="sk-glass">
+        <button type="button" class="sk-btn" data-act="undo-sketch" aria-label="Undo" title="Undo">${sketchIcon('undo')}</button>
+        ${NATIVE ? `<button type="button" class="sk-btn" data-act="redo-sketch" aria-label="Redo" title="Redo">${sketchIcon('redo')}</button>` : ''}
+        <button type="button" class="sk-btn" data-act="clear-sketch" aria-label="Clear the drawing" title="Clear the drawing">${sketchIcon('clear')}</button>
+      </div>
+      <span class="sk-spacer"></span>
+      <div class="sk-glass sk-pages">
+        <button type="button" class="sk-btn" data-act="sketch-page" data-step="-1" ${index === 0 ? 'disabled' : ''} aria-label="Previous page">${sketchIcon('prev')}</button>
+        <span class="sk-page-label">${index + 1} / ${count}</span>
+        <button type="button" class="sk-btn" data-act="sketch-page" data-step="1" ${index === count - 1 ? 'disabled' : ''} aria-label="Next page">${sketchIcon('next')}</button>
+        <button type="button" class="sk-btn" data-act="sketch-add-page" aria-label="Add a page" title="Add a page">${sketchIcon('add')}</button>
+        <button type="button" class="sk-btn" data-act="sketch-del-page" aria-label="Delete this page" title="Delete this page">${sketchIcon('clear')}</button>
+      </div>
+      <div class="sk-glass">
+        <button type="button" class="sk-btn" data-act="sketch-fullscreen" aria-label="${full ? 'Exit full screen' : 'Full screen'}" title="${full ? 'Exit full screen' : 'Full screen'}">${sketchIcon(full ? 'shrink' : 'expand')}</button>
+      </div>
+    </div>`;
+}
+
+function renderTopbarTools() {
+  const el = $('#topbarTools');
+  if (!el) return;
+  const log = activeSortie();
+  if (activeTab !== 'sketch' || !log) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = sketchToolsHTML(log);
+}
+
+function sketchView(log) {
+  const { page, index } = currentSketchPage(log);
+  const { w, h } = sketchSize(page);
+  return `<div class="sketch-shell${sketchFullscreen ? ' fullscreen' : ''}" id="sketch-card">
       <div class="sketch-stage">
-        <div class="canvas-wrap">
-          <canvas id="sketch-bg" width="1000" height="1250" aria-hidden="true"></canvas>
-          <canvas id="sketch" width="1000" height="1250" aria-label="Sketch pad, page ${index + 1}"></canvas>
+        <div class="canvas-wrap" style="--ar:${w / h}">
+          <canvas id="sketch-bg" width="${w}" height="${h}" aria-hidden="true"></canvas>
+          <canvas id="sketch" width="${w}" height="${h}" aria-label="Sketch pad, page ${index + 1}"></canvas>
         </div>
-      </div>
-      <div class="sk-bar sk-bottom">
-        <div class="sk-glass sk-pages">
-          <button type="button" class="sk-btn" data-act="sketch-page" data-step="-1" ${index === 0 ? 'disabled' : ''} aria-label="Previous page">${sketchIcon('prev')}</button>
-          <span class="sk-page-label">Page ${index + 1} of ${count}</span>
-          <button type="button" class="sk-btn" data-act="sketch-page" data-step="1" ${index === count - 1 ? 'disabled' : ''} aria-label="Next page">${sketchIcon('next')}</button>
-        </div>
-        <div class="sk-glass sk-pagebtns">
-          <button type="button" class="sk-btn wide" data-act="sketch-add-page">${sketchIcon('add')}Page</button>
-          <button type="button" class="sk-btn wide" data-act="sketch-del-page">Delete</button>
-        </div>
-        <div class="sk-note">${CHART_LAYERS[page.bg]
-          ? esc(CHART_LAYERS[page.bg].source) + ' · kept with this page for offline use · not for navigation'
-          : NATIVE ? 'Tools in the floating palette · pinch to zoom' : 'Pencil pressure sets the line · saved as you draw'}</div>
       </div>
     </div>`;
 }
@@ -4490,8 +4517,7 @@ async function sketchUnderlay(page, W, H) {
 async function applyNativeSketch(data) {
   const page = state.logs.flatMap(l => l.sketches).find(p => p.id === data.pageId);
   if (!page) return;
-  const W = 1000;
-  const H = 1250;
+  const { w: W, h: H } = sketchSize(page);
   page.pk = data.drawing || '';
   const base = await loadImg(page.inkBase);
   const ink = await loadImg(data.ink);
@@ -4545,7 +4571,7 @@ function setupNativeSketch(page, W, H) {
     const background = await sketchUnderlay(page, W, H);
     if (activeTab !== 'sketch' || currentSketchPage(activeLog()).page !== page) return;
     nativeSketchOn = true;
-    await Native.MissionLog.sketchShow(Object.assign({ pageId: page.id, drawing: page.pk || '', background }, sketchRect()));
+    await Native.MissionLog.sketchShow(Object.assign({ pageId: page.id, drawing: page.pk || '', background, pageWidth: W, pageHeight: H }, sketchRect()));
     if ($('#overlay').classList.contains('show')) nativeSketchVisible(false);
   };
   show().catch(err => console.warn('sketch', err));
@@ -4591,6 +4617,19 @@ function setupSketch() {
   const H = canvas.height;
   const log = activeLog();
   const { page } = currentSketchPage(log);
+  const stage = $('.sketch-stage');
+  const room = stage && stage.getBoundingClientRect();
+  if (room && room.width > 100 && room.height > 100 && sketchPageBlank(page)) {
+    const fitH = Math.min(2400, Math.max(300, Math.round(1000 * room.height / room.width)));
+    if (Math.abs(fitH - sketchSize(page).h) > 4) {
+      page.w = 1000;
+      page.h = fitH;
+      page.image = '';
+      save();
+      render();
+      return;
+    }
+  }
   if (NATIVE) {
     // PencilKit draws; the web canvases only show the page until it is up
     paintSketchBackground(bctx, page, W, H);
@@ -4778,11 +4817,12 @@ async function setSketchBackground(bg) {
   if (page.bg === 'image') page.ink = '';
   const chart = CHART_LAYERS[bg];
   if (chart) {
-    const view = sketchMapView(log, 1000, 1250, bg);
+    const { w: PW, h: PH } = sketchSize(page);
+    const view = sketchMapView(log, PW, PH, bg);
     if (!view) { toast('No position yet · fill the search area on Brief or get a GPS fix'); return; }
     toast('Loading the ' + chart.label.toLowerCase() + ' map…');
     try {
-      page.bgImage = await renderChartImage(view, 1000, 1250, bg);
+      page.bgImage = await renderChartImage(view, PW, PH, bg);
     } catch (err) {
       console.warn('chart background failed', err);
       toast('Could not load the map · it needs a connection the first time');
@@ -6800,11 +6840,12 @@ function buildPdfBlob() {
   }
   ny += noteH + 8;
 
-  // every sketch page with something on it, each at the size of the first
+  // every sketch page with something on it, each at its own shape
   log.sketches.filter(sketchHasContent).forEach(page => {
-    let sw = 190;
-    let sh = 238;
-    if (ny + sh > 460) { sw = 160; sh = 200; }
+    const ratio = sketchSize(page).h / sketchSize(page).w;
+    let sh = Math.min(300, 190 * ratio);
+    let sw = sh / ratio;
+    if (ny + sh > 460) { sh = Math.min(240, 160 * ratio); sw = sh / ratio; }
     if (ny + sh > H - 40) {
       doc.addPage();
       pdfHeader(doc, 'Notes & Observations (continued)', mission + ' · Sortie ' + sortie, ['Printed ' + printed]);

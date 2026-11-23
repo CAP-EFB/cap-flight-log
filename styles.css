@@ -918,81 +918,56 @@ textarea.notes-full {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-/* ---------- the sketch pad, full page like Fly ---------- */
+/* ---------- the sketch pad: the page fills the screen ---------- */
 .sketch-shell {
   position: fixed; left: 0; right: 0;
   top: var(--page-top, 110px);
   bottom: calc(58px + env(safe-area-inset-bottom));
   z-index: 10;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 10px max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left));
-  /* a dark desk under the page */
-  background: radial-gradient(ellipse at 50% 40%, #273444 0%, #151d27 75%);
-  color: #f2f6fa;
+  background: #151d27;   /* shows only if the page's shape differs (the iPad turned) */
   overflow: hidden;
 }
-.sketch-shell .sketch-stage { min-height: 0; }
+.sketch-shell .sketch-stage { position: absolute; inset: 0; }
 .sketch-shell .canvas-wrap {
-  border: 0;
-  border-radius: 10px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .06);
+  width: min(100cqw, calc(100cqh * var(--ar, .8)));
+  aspect-ratio: var(--ar, .8);
+  border: 0; border-radius: 0; box-shadow: none;
 }
-/* the control strips */
-.sk-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-height: 48px; }
-.sk-group { display: flex; align-items: center; gap: 8px; }
+
+/* its tools: a row of the header */
+.topbar-tools { max-width: 1240px; margin: 0 auto; padding: 0 16px 8px; }
+.topbar-tools[hidden] { display: none; }
+.sk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sk-spacer { flex: 1; }
 .sk-glass {
   display: inline-flex; align-items: center; gap: 2px;
-  padding: 4px;
+  padding: 3px;
   border-radius: 999px;
   background: rgba(255, 255, 255, .08);
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, .1);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
 }
-.sk-bgs { border-radius: 999px; }
-.sk-bgs button { min-height: 38px; padding: 0 13px; border-radius: 999px; border: 0; background: transparent; color: rgba(242, 246, 250, .8); font-weight: 650; font-size: 13px; cursor: pointer; }
+.sk-bgs button { min-height: 34px; padding: 0 12px; border-radius: 999px; border: 0; background: transparent; color: rgba(242, 246, 250, .8); font-weight: 650; font-size: 13px; cursor: pointer; }
 .sk-bgs button.active { background: #fff; color: #14212f; }
 .sk-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-width: 40px; height: 40px; padding: 0 10px;
+  min-width: 36px; height: 34px; padding: 0 8px;
   border: 0; border-radius: 999px;
   background: transparent; color: #f2f6fa;
   font-size: 14px; font-weight: 650; cursor: pointer;
 }
-.sk-btn svg { width: 20px; height: 20px; }
+.sk-btn svg { width: 19px; height: 19px; }
 .sk-btn:active { background: rgba(255, 255, 255, .14); }
 .sk-btn[disabled] { opacity: .3; pointer-events: none; }
-.sk-btn.wide { padding: 0 14px; }
-.sk-pens { gap: 6px; padding: 5px 7px; }
-.sk-pens .swatch { width: 32px; height: 32px; border-radius: 50%; border-color: rgba(255, 255, 255, .3); }
+.sk-pens { gap: 5px; padding: 3px 6px; }
+.sk-pens .swatch { width: 28px; height: 28px; border-radius: 50%; border-color: rgba(255, 255, 255, .3); }
 .sk-pens .swatch.eraser { background: rgba(255, 255, 255, .12); color: #fff; }
-.sk-page-label { min-width: 92px; text-align: center; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.sk-note { flex: 1 1 100%; text-align: center; font-size: 11px; color: rgba(242, 246, 250, .55); order: 3; }
-@media (min-width: 900px) { .sk-note { flex: 1 1 0; order: 0; } }
-/* wider than tall (landscape): the controls move into the side margins, so the page gets the full height */
-@media (min-aspect-ratio: 1/1) {
-  .sketch-shell { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 14px; }
-  .sketch-shell .sketch-stage { grid-column: 2; grid-row: 1; width: min(calc(100vw - 420px), calc((100dvh - var(--page-top, 110px) - 80px) * .8)); }
-  .sketch-shell.fullscreen .sketch-stage { width: min(calc(100vw - 420px), calc((100dvh - 30px) * .8)); }
-  .sk-bar { flex-direction: column; align-items: stretch; justify-content: center; flex-wrap: nowrap; min-height: 0; }
-  .sk-top { grid-column: 1; grid-row: 1; align-items: flex-end; }
-  .sk-bottom { grid-column: 3; grid-row: 1; align-items: flex-start; }
-  .sk-group { flex-direction: column; align-items: flex-end; }
-  .sk-bgs { flex-direction: column; border-radius: 22px; }
-  .sk-bgs button { width: 100%; }
-  .sk-note { flex: 0 0 auto; order: 3; text-align: left; max-width: 180px; }
-}
+.sk-page-label { min-width: 44px; text-align: center; font-size: 13px; font-weight: 700; color: #f2f6fa; font-variant-numeric: tabular-nums; }
 
-/* full screen: over the header and the tab bar */
+/* full screen: the header keeps only the tools; the tab bar goes */
 html.sketch-full, html.sketch-full body { overflow: hidden; }
-.sketch-shell.fullscreen {
-  top: 0; bottom: 0; z-index: 170;
-  padding-top: max(10px, env(safe-area-inset-top));
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
-}
-
+html.sketch-full .topbar-row { display: none; }
+html.sketch-full .tabbar { display: none; }
+.sketch-shell.fullscreen { bottom: 0; }
 
 .sketch-hint {
   margin-top: 8px;

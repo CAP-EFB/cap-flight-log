@@ -47,10 +47,11 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         let pageId = call.getString("pageId") ?? ""
         let drawing = call.getString("drawing") ?? ""
         let background = call.getString("background") ?? ""
+        let size = CGSize(width: call.getDouble("pageWidth") ?? 1000, height: call.getDouble("pageHeight") ?? 1250)
         DispatchQueue.main.async {
             guard let host = self.bridge?.webView else { call.reject("no web view"); return }
             SketchPad.shared.plugin = self
-            SketchPad.shared.show(in: host, frame: frame, pageId: pageId, drawing: drawing, background: background)
+            SketchPad.shared.show(in: host, frame: frame, pageId: pageId, size: size, drawing: drawing, background: background)
             call.resolve()
         }
     }
@@ -89,7 +90,7 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// A page's strokes changed: its PencilKit drawing (to edit again) and its
-    /// ink as a transparent 1000 × 1250 PNG (for the PDF and printout).
+    /// ink as a transparent PNG the page's size (for the PDF and printout).
     func sketchChanged(pageId: String, drawing: String, ink: String) {
         notifyListeners("sketchChanged", data: ["pageId": pageId, "drawing": drawing, "ink": ink])
     }
@@ -287,9 +288,9 @@ final class TrackRecorder: NSObject, CLLocationManagerDelegate {
     }
 }
 
-/// The sketch pad as PencilKit: a canvas the size of the page (1000 × 1250
-/// points, zoomed to fit its place on screen and pinch-zoomable up to five
-/// times), the page's background in an image view under the strokes, and
+/// The sketch pad as PencilKit: a canvas the size of the page (1000 points
+/// wide, as tall as the screen's shape made it; zoomed to fit its place on
+/// screen and pinch-zoomable up to five times), the page's background in an image view under the strokes, and
 /// Apple's tool picker. Whether a finger draws follows the iPad's own
 /// "Only Draw with Apple Pencil" setting.
 final class SketchPad: NSObject, PKCanvasViewDelegate {
@@ -299,7 +300,7 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
     private let underlay = UIImageView()
     private var toolPicker: AnyObject?   // PKToolPicker, iPadOS 14+
     private var pageId = ""
-    private let page = CGSize(width: 1000, height: 1250)
+    private var page = CGSize(width: 1000, height: 1250)
     private var pending: DispatchWorkItem?
     private var loading = false
     private var fitted = false   // zoomed to fit at least once since this page opened
@@ -315,7 +316,7 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         view.bouncesZoom = true
         // paper and charts are light: ink keeps its true colours in dark mode
         view.overrideUserInterfaceStyle = .light
-        view.layer.cornerRadius = 10
+        view.layer.cornerRadius = 0
         view.clipsToBounds = true
         if #available(iOS 14.0, *) { view.drawingPolicy = .default }
         view.tool = PKInkingTool(.pen, color: UIColor(red: 0.09, green: 0.13, blue: 0.18, alpha: 1), width: 4)
@@ -333,12 +334,13 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         return view
     }
 
-    func show(in host: UIView, frame: CGRect, pageId: String, drawing: String, background: String) {
+    func show(in host: UIView, frame: CGRect, pageId: String, size: CGSize, drawing: String, background: String) {
         let view = canvas ?? makeCanvas(in: host)
         if view.superview !== host { host.addSubview(view) }
-        if pageId != self.pageId {
+        if pageId != self.pageId || size != page {
             flush()
             self.pageId = pageId
+            page = size
             loading = true
             if let data = Data(base64Encoded: drawing), let loaded = try? PKDrawing(data: data) {
                 view.drawing = loaded
