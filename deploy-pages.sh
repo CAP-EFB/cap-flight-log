@@ -7,7 +7,7 @@ git fetch origin gh-pages
 worktree="$(mktemp -d)/efb-gh-pages"
 git worktree add --detach "$worktree" origin/gh-pages
 
-cp index.html app.js styles.css sw.js manifest.webmanifest .nojekyll "$worktree"/
+cp index.html privacy.html app.js styles.css sw.js manifest.webmanifest .nojekyll "$worktree"/
 rm -rf "$worktree/icons"
 cp -R icons "$worktree/icons"
 rm -rf "$worktree/vendor"

@@ -202,8 +202,8 @@ npm run open         # open ios/App in Xcode, then build and run on a simulator 
 **TestFlight / App Store:** `scripts/testflight.sh` builds the release app and uploads it to App Store
 Connect (app "Aircrew Mission Log", bundle ID `io.missionlog.app`, team `G3Q54YD3D3`). The store version
 is `APP_VERSION` from `app.js`; the build number is the UTC date and time, so each upload is higher.
-`--no-upload` builds the signed package only. The privacy policy is at
-https://cap-efb.github.io/privacy.html.
+`--no-upload` builds the signed package only. The privacy policy is `privacy.html`,
+published with the app at https://missionlog.io/privacy.html.
 
 Run `npm run sync` after every change to `index.html`, `app.js`, `styles.css`, `icons/` or `vendor/`.
 App ID: `io.missionlog.app`. Location, camera and photo permission texts are in
