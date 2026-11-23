@@ -37,7 +37,12 @@ sorties** (Sortie No., e.g. A0009). The tabs are **Missions**, then one sortie f
   beside the button, as a popover pointing at it (with tach at Engine Start and Shut Down); zoom and centre; OPS check and Log bottom left. Log
   slides up the timeline of entries and observations (up to six photos each) and the OPS checks with their
   next-due reminder. Tapping the header's position opens Fly centred on the aircraft.
-- **Notes** — free text, the whole page, shrinking above the keyboard.
+- **Notes** — a lined page filling the screen (shrinking above the keyboard), with tools for the air:
+  **Stamp** puts the UTC time, CAP grid and position at the cursor; quick entries (Ops normal, Radio check,
+  Contact, Freq change, Weather, Turbulence, Sighting) add a stamped line in one tap; **Dictate** turns
+  speech into text (in the iPad app with Apple's speech recognition, on the iPad where it can; in a
+  browser where it offers speech); **Scan text** (iPad app) reads a printed briefing or NOTAM with the
+  document camera and adds the text. A line and word count shows what is there.
 - **Sketch** — a sketch pad filling everything between the header and the tab bar, with its tools
   (backgrounds, Undo/Redo, Clear, pages) in a row of the header. Each page is a canvas you pan and zoom,
   anchored to a piece of the map around the search area (Web Mercator pixels at zoom 12, about 330 km

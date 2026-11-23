@@ -46,7 +46,11 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Mission Log shows your position, accuracy and CAP grid, and stamps it on checkpoints and observations.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Mission Log takes photos for observations.</string>
+	<string>Mission Log takes photos for observations and scans printed briefings into your notes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mission Log listens while you dictate a note.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Mission Log turns what you say into text in your notes, on the iPad where it can.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Mission Log adds photos from your library to observations.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

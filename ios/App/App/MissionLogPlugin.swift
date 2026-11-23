@@ -2,6 +2,10 @@ import UIKit
 import Capacitor
 import CoreLocation
 import PencilKit
+import Speech
+import AVFoundation
+import Vision
+import VisionKit
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
@@ -29,8 +33,44 @@ public class MissionLogPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sketchHide", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sketchUndo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sketchRedo", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "sketchClear", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "sketchClear", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dictateStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dictateStop", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "scanText", returnType: CAPPluginReturnPromise)
     ]
+
+    // MARK: notes: dictation and scanning
+
+    /// Starts turning speech into text: "dictation" events carry the text so
+    /// far (partial while speaking, final at the end). On the iPad where it can.
+    @objc func dictateStart(_ call: CAPPluginCall) {
+        Dictation.shared.plugin = self
+        Dictation.shared.start { error in
+            if let error = error { call.reject(error) } else { call.resolve() }
+        }
+    }
+
+    @objc func dictateStop(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { Dictation.shared.stop(); call.resolve() }
+    }
+
+    func dictation(text: String, final: Bool) {
+        notifyListeners("dictation", data: ["text": text, "final": final])
+    }
+
+    /// Opens the iPad's document camera (auto-crop, several pages), reads the
+    /// text off the pages and returns it.
+    @objc func scanText(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard VNDocumentCameraViewController.isSupported else { call.reject("This iPad cannot scan documents"); return }
+            guard let presenter = self.bridge?.viewController else { call.reject("no view"); return }
+            let scanner = VNDocumentCameraViewController()
+            let delegate = DocumentScan(call: call)
+            scanner.delegate = delegate
+            DocumentScan.current = delegate
+            presenter.present(scanner, animated: true)
+        }
+    }
 
     // MARK: sketch pad (PencilKit)
 
@@ -533,6 +573,107 @@ final class SketchPad: NSObject, PKCanvasViewDelegate {
         }
         let ink = drawing.strokes.isEmpty ? "" : "data:image/png;base64," + (image.pngData()?.base64EncodedString() ?? "")
         plugin?.sketchChanged(pageId: pageId, drawing: drawing.strokes.isEmpty ? "" : drawing.dataRepresentation().base64EncodedString(), ink: ink)
+    }
+}
+
+/// Speech to text for the notes: on-device recognition where the iPad
+/// supports it, partial results as the crew speaks.
+final class Dictation {
+    static let shared = Dictation()
+    weak var plugin: MissionLogPlugin?
+    private let engine = AVAudioEngine()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+
+    func start(done: @escaping (String?) -> Void) {
+        SFSpeechRecognizer.requestAuthorization { status in
+            guard status == .authorized else { DispatchQueue.main.async { done("Speech recognition is off for Mission Log in Settings") }; return }
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    guard granted else { done("The microphone is off for Mission Log in Settings"); return }
+                    do { try self.begin(); done(nil) } catch { done(error.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    private func begin() throws {
+        stop()
+        guard let recognizer = recognizer, recognizer.isAvailable else { throw NSError(domain: "Dictation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Dictation is not available right now"]) }
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        if #available(iOS 16.0, *) { request.addsPunctuation = true }
+        self.request = request
+        let input = engine.inputNode
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
+            request.append(buffer)
+        }
+        engine.prepare()
+        try engine.start()
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            if let result = result {
+                self?.plugin?.dictation(text: result.bestTranscription.formattedString, final: result.isFinal)
+            }
+            if error != nil || (result?.isFinal ?? false) {
+                DispatchQueue.main.async { self?.stop() }
+            }
+        }
+    }
+
+    func stop() {
+        if engine.isRunning {
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+        }
+        request?.endAudio()
+        request = nil
+        task?.finish()
+        task = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// The document camera's pages, read with Vision's accurate text recognition.
+final class DocumentScan: NSObject, VNDocumentCameraViewControllerDelegate {
+    static var current: DocumentScan?
+    let call: CAPPluginCall
+    init(call: CAPPluginCall) { self.call = call }
+
+    func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+        controller.dismiss(animated: true)
+        let images = (0..<scan.pageCount).map { scan.imageOfPage(at: $0) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var pages: [String] = []
+            for image in images {
+                guard let cg = image.cgImage else { continue }
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
+                let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                pages.append(lines.joined(separator: "\n"))
+            }
+            self.call.resolve(["text": pages.joined(separator: "\n\n"), "pages": images.count])
+            DocumentScan.current = nil
+        }
+    }
+
+    func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+        controller.dismiss(animated: true)
+        call.resolve(["text": "", "pages": 0])
+        DocumentScan.current = nil
+    }
+
+    func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+        controller.dismiss(animated: true)
+        call.reject(error.localizedDescription)
+        DocumentScan.current = nil
     }
 }
 

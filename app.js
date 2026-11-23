@@ -5,7 +5,7 @@
    All data stays in the browser (IndexedDB with a localStorage mirror).
    ========================================================================= */
 
-const APP_VERSION = '1.36.0';
+const APP_VERSION = '1.37.0';
 const STATE_KEY = 'observer-log-state-v1';
 const STATE_MIRROR_LIMIT = 2000000;
 const DB_NAME = 'observer-log';
@@ -3196,6 +3196,7 @@ function render() {
   // Brief…Sign are about one sortie: Missions until one is open
   if (activeTab !== 'logbook' && !activeSortie()) activeTab = 'logbook';
   if (activeTab !== 'fly' && positionMap) closePositionView();
+  if (activeTab !== 'notes' && noteDictation) stopNoteDictation();
   document.documentElement.classList.toggle('page-full', activeTab === 'notes' || activeTab === 'sketch');
   if (activeTab === 'logbook') view.innerHTML = logbookView();
   else if (activeTab === 'plan') view.innerHTML = planView(log);
@@ -4382,15 +4383,178 @@ function currentSketchPage(log) {
   return { page: pages[index], index, count: pages.length };
 }
 
-// Notes: one text box filling the page. It shrinks above the keyboard.
+/* ---------- Notes ----------
+   A lined page for the narrative, radio traffic and anything else, with
+   tools for writing in the air: Stamp puts the UTC time, CAP grid and
+   position at the cursor; the quick entries add a stamped line in one tap;
+   Dictate turns speech into text (on the iPad where it can); Scan reads a
+   printed briefing with the document camera. Apple Pencil Scribble works in
+   the box as anywhere on the iPad. */
+const NOTE_ICONS = {
+  stamp: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+  scan: '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/>'
+};
+const noteIcon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${NOTE_ICONS[name]}</svg>`;
+// [label, text after the stamp, leave the keyboard down (a complete entry)]
+const NOTE_QUICK = [
+  ['Ops normal', 'Ops normal', true],
+  ['Radio check', 'Radio check — ', false],
+  ['Contact', 'Contact: ', false],
+  ['Freq change', 'Freq change to ', false],
+  ['Weather', 'Wx: ', false],
+  ['Turbulence', 'Turbulence: ', false],
+  ['Sighting', 'Sighting: ', false]
+];
+let noteDictation = null;   // { start, text } while dictating
+
+function canDictate() {
+  return NATIVE || !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function notesMetaText(text) {
+  const lines = text ? text.split('\n').filter(l => l.trim()).length : 0;
+  const words = text ? (text.match(/\S+/g) || []).length : 0;
+  return lines + (lines === 1 ? ' line' : ' lines') + ' · ' + words + (words === 1 ? ' word' : ' words') + ' · saved';
+}
+
 function notesView(log) {
   return `<div class="page-fill">
     <section class="card notes-card">
-      <div class="card-head"><div class="head-left"><h2>Notes</h2></div><span class="muted small">Saved as you type</span></div>
-      <textarea class="input notes-full" data-bind="notes"
-        placeholder="Narrative notes, radio traffic, coordination, anything that does not fit elsewhere.">${esc(log.notes)}</textarea>
+      <div class="card-head">
+        <div class="head-left"><h2>Notes</h2></div>
+        <span class="muted small" id="notes-meta">${esc(notesMetaText(log.notes))}</span>
+      </div>
+      <div class="notes-tools">
+        <button type="button" class="btn small" data-act="note-stamp" title="Insert the UTC time, CAP grid and position">${noteIcon('stamp')}Stamp</button>
+        ${canDictate() ? `<button type="button" class="btn small${noteDictation ? ' listening' : ''}" id="note-dictate" data-act="note-dictate" aria-pressed="${noteDictation ? 'true' : 'false'}">${noteIcon('mic')}<span>${noteDictation ? 'Stop' : 'Dictate'}</span></button>` : ''}
+        ${NATIVE ? `<button type="button" class="btn small" data-act="note-scan" title="Scan printed text with the camera">${noteIcon('scan')}Scan text</button>` : ''}
+        <span class="notes-sep" aria-hidden="true"></span>
+        <div class="notes-quick" role="group" aria-label="Quick entries">
+          ${NOTE_QUICK.map(([label], i) => `<button type="button" class="chip-btn" data-act="note-quick" data-index="${i}">${esc(label)}</button>`).join('')}
+        </div>
+      </div>
+      <textarea class="input notes-full" id="notes-text" data-bind="notes" spellcheck="true"
+        placeholder="Narrative notes, radio traffic, coordination, anything that does not fit elsewhere. Stamp adds the time, grid and position; the quick entries add a stamped line.">${esc(log.notes)}</textarea>
     </section>
   </div>`;
+}
+
+// "1432Z · NYC 215 B · N 42° 13.20′ W 71° 36.00′ — "
+function noteStamp() {
+  const fix = freshFix();
+  const bits = [nowZ() + 'Z'];
+  if (fix) {
+    const grid = capGridName(fix.lat, fix.lon);
+    if (grid) bits.push(grid);
+    bits.push(fmtCoord(fix.lat, true) + ' ' + fmtCoord(fix.lon, false));
+  }
+  return bits.join(' · ') + ' — ';
+}
+
+/* Put text into the notes: at the cursor when the box is being typed in,
+   otherwise on a new line at the end. `focus` brings the keyboard up after. */
+function insertIntoNotes(text, { newLine = true, focus = false } = {}) {
+  const area = $('#notes-text');
+  const log = activeSortie();
+  if (!area || !log) return null;
+  const typing = document.activeElement === area;
+  const value = area.value;
+  let at = typing ? area.selectionStart : value.length;
+  let before = value.slice(0, at);
+  const after = value.slice(typing ? area.selectionEnd : value.length);
+  let insert = text;
+  if (newLine && before && !before.endsWith('\n')) insert = '\n' + insert;
+  else if (!newLine && before && !/\s$/.test(before)) insert = ' ' + insert;   // not run into the word before
+  area.value = before + insert + after;
+  const caret = (before + insert).length;
+  area.dispatchEvent(new Event('input', { bubbles: true }));
+  if (focus || typing) {
+    area.focus({ preventScroll: true });
+    area.setSelectionRange(caret, caret);
+  }
+  // keep the new line in view
+  if (!typing) area.scrollTop = area.scrollHeight;
+  return { start: (before + (insert.startsWith('\n') ? '\n' : '')).length, end: caret };
+}
+
+function updateNotesMeta() {
+  const meta = $('#notes-meta');
+  const area = $('#notes-text');
+  if (meta && area) meta.textContent = notesMetaText(area.value);
+}
+
+// Dictation: the words replace themselves as recognition firms them up.
+function dictationText(text, final) {
+  const area = $('#notes-text');
+  const d = noteDictation;
+  if (!area || !d) return;
+  const value = area.value;
+  area.value = value.slice(0, d.start) + text + value.slice(d.start + d.text.length);
+  d.text = text;
+  area.dispatchEvent(new Event('input', { bubbles: true }));
+  area.scrollTop = area.scrollHeight;
+  if (final) stopNoteDictation();
+}
+
+async function startNoteDictation() {
+  const spot = insertIntoNotes(noteStamp(), { newLine: true });
+  if (!spot) return;
+  noteDictation = { start: spot.end, text: '', web: null };
+  renderDictateButton();
+  if (NATIVE) {
+    try { await Native.MissionLog.dictateStart(); }
+    catch (err) { toast(String(err && err.message || err)); stopNoteDictation(); }
+    return;
+  }
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new Rec();
+  rec.lang = 'en-US';
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.onresult = e => {
+    const text = Array.from(e.results).map(r => r[0].transcript).join(' ').replace(/\s+/g, ' ').trim();
+    dictationText(text, false);
+  };
+  rec.onerror = e => { toast('Dictation stopped · ' + (e.error || 'no microphone')); stopNoteDictation(); };
+  rec.onend = () => stopNoteDictation();
+  noteDictation.web = rec;
+  rec.start();
+}
+
+function stopNoteDictation() {
+  const d = noteDictation;
+  if (!d) return;
+  noteDictation = null;
+  if (NATIVE) Native.MissionLog.dictateStop().catch(() => {});
+  else if (d.web) { try { d.web.onend = null; d.web.stop(); } catch (_) { /* ignore */ } }
+  renderDictateButton();
+  updateNotesMeta();
+}
+
+function renderDictateButton() {
+  const btn = $('#note-dictate');
+  if (!btn) return;
+  btn.classList.toggle('listening', !!noteDictation);
+  btn.setAttribute('aria-pressed', noteDictation ? 'true' : 'false');
+  btn.querySelector('span').textContent = noteDictation ? 'Stop' : 'Dictate';
+}
+
+if (NATIVE) {
+  Native.MissionLog.addListener('dictation', data => dictationText(data.text || '', !!data.final));
+}
+
+async function scanIntoNotes() {
+  try {
+    const result = await Native.MissionLog.scanText();
+    const text = String(result && result.text || '').trim();
+    if (!result || !result.pages) return;   // cancelled
+    if (!text) { toast('No text found on the scan'); return; }
+    insertIntoNotes('— Scanned ' + nowZ() + 'Z (' + result.pages + (result.pages === 1 ? ' page' : ' pages') + ') —\n' + text + '\n', { newLine: true });
+    toast('Scanned text added to the notes');
+  } catch (err) {
+    toast('Could not scan · ' + String(err && err.message || err));
+  }
 }
 
 const SKETCH_TOOL_ICONS = {
@@ -8351,6 +8515,15 @@ const actions = {
     if (panel.hidden) target.focus(); else target.blur();
   },
   'save-hobbs': el => saveHobbsFromSheet(el.dataset.id),
+  'note-stamp': () => insertIntoNotes(noteStamp(), { newLine: !document.activeElement || document.activeElement.id !== 'notes-text', focus: true }),
+  'note-quick': el => {
+    const [, text, done] = NOTE_QUICK[Number(el.dataset.index)] || [];
+    if (text == null) return;
+    insertIntoNotes(noteStamp() + text, { newLine: true, focus: !done });
+    if (done) toast(text + ' noted at ' + nowZ() + 'Z');
+  },
+  'note-dictate': () => { if (noteDictation) stopNoteDictation(); else startNoteDictation(); },
+  'note-scan': () => scanIntoNotes(),
   'obs-pop-done': () => closeObsPop(false),
   'obs-pop-discard': () => {
     const pop = $('#obs-pop');
@@ -8807,6 +8980,7 @@ document.addEventListener('input', event => {
   if (el.matches('[data-coord]')) updateCoordHelp(el);
   if (el.matches('textarea[maxlength]')) updateCharCount(el);
   if (/^(m\.number|sortie|aircraft|callsign|crew\.)/.test(path)) renderStrip();
+  if (path === 'notes') updateNotesMeta();
   if (/^(sar\.corners|entry|exit)\./.test(path) && !mapSaveJob) renderOfflineMapsCard();
 
   save();
@@ -8872,6 +9046,11 @@ document.addEventListener('focusout', () => {
     if ($('#overlay').classList.contains('show')) return;   // the sheet redraws when it closes
     render();
   }, 0);
+});
+
+// The notes' tools keep the cursor where it is in the text: a tap on them does not take focus.
+document.addEventListener('pointerdown', event => {
+  if (event.target.closest('.notes-tools button')) event.preventDefault();
 });
 
 // A tap anywhere off the Hobbs popover puts it away, as Skip does.
