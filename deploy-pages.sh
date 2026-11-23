@@ -23,4 +23,4 @@ else
 fi
 cd - >/dev/null
 git worktree remove --force "$worktree"
-echo "Deployed to https://cap-efb.github.io/cap-mission-log/"
+echo "Deployed to https://missionlog.io/cap-mission-log/"
