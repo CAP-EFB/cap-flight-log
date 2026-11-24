@@ -1,9 +1,10 @@
 /* Mission Log service worker — cache-first so the app works with no signal. */
-const CACHE = 'observer-log-v1.37.4';
+const CACHE = 'observer-log-v1.37.5';
 
 const ASSETS = [
   './',
   './index.html',
+  './privacy.html',
   './styles.css',
   './app.js',
   './vendor/jspdf.umd.min.js',
@@ -45,10 +46,14 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Opening the app (its root or index.html) gets the cached app; any other
+  // page on the site (the privacy policy) loads as itself, from the cache
+  // when offline.
   if (request.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then(cached => cached || fetch(request))
-    );
+    const isApp = /\/(index\.html)?$/.test(url.pathname);
+    event.respondWith(isApp
+      ? caches.match('./index.html').then(cached => cached || fetch(request))
+      : fetch(request).catch(() => caches.match(request, { ignoreSearch: true })));
     return;
   }
 
